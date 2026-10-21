@@ -1,0 +1,82 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    // Enforce strictly ONE single Admin account with @gmail.com email
+    function isAuthority() {
+      return isSignedIn()
+        && request.auth.token.email == 'cleanvillage.admin@gmail.com'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'authority';
+    }
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    function hasValidCoordinates(data) {
+      return (!('reported_latitude' in data) || data.reported_latitude == null
+        || (data.reported_latitude is number && data.reported_latitude >= -90 && data.reported_latitude <= 90))
+        && (!('reported_longitude' in data) || data.reported_longitude == null
+        || (data.reported_longitude is number && data.reported_longitude >= -180 && data.reported_longitude <= 180));
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAuthority();
+      allow create: if isOwner(userId)
+        && request.resource.data.role == 'citizen'
+        && request.resource.data.email.matches('^[a-zA-Z0-9._%+-]+@gmail\\.com$')
+        && request.resource.data.email != 'cleanvillage.admin@gmail.com'
+        && request.resource.data.greenPoints == 0;
+      allow update: if (isOwner(userId)
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.greenPoints == resource.data.greenPoints)
+        || isAuthority();
+    }
+
+    match /complaints/{complaintId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAuthority());
+      allow create: if isSignedIn()
+        && request.resource.data.status == 'Pending'
+        && hasValidCoordinates(request.resource.data);
+      allow update: if (isAuthority() && hasValidCoordinates(request.resource.data))
+        || (isOwner(resource.data.userId) && resource.data.status == 'Rejected' && hasValidCoordinates(request.resource.data));
+    }
+
+    match /tasks/{taskId} {
+      allow read: if isSignedIn();
+      allow write: if isAuthority();
+    }
+
+    match /schedules/{scheduleId} {
+      allow read: if true;
+      allow write: if isAuthority();
+    }
+
+    match /rewards/{rewardId} {
+      allow read: if true;
+      allow write: if isAuthority();
+    }
+
+    match /redemptions/{redemptionId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAuthority());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthority();
+    }
+
+    match /pointTransactions/{txId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAuthority());
+      allow write: if isAuthority();
+    }
+
+    match /activities/{activityId} {
+      allow read: if true;
+      allow create, delete: if isAuthority();
+      allow update: if isSignedIn();
+    }
+
+    match /notifications/{notifId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.targetRole == 'authority' || resource.data.targetRole == 'all');
+      allow create, update: if isSignedIn();
+    }
+  }
+}
