@@ -22,7 +22,7 @@ import { formatLocationLabel } from '../services/geocoding';
 
 export default function HomePage() {
   const {
-    complaints,
+    publicAggregateStats,
     tasks,
     users,
     schedules,
@@ -34,14 +34,43 @@ export default function HomePage() {
     matchesLocationFilter,
   } = useApp();
 
-  const filteredComplaints = complaints.filter((c) => matchesLocationFilter(c, selectedLocation));
   const filteredSchedules = schedules.filter((s) => s.active && matchesLocationFilter(s, selectedLocation));
   const filteredActivities = activities.filter((a) => matchesLocationFilter(a, selectedLocation));
 
-  const totalReported = filteredComplaints.length;
-  const resolvedCount = filteredComplaints.filter((c) => c.status === 'Resolved').length;
+  const totalReported = publicAggregateStats?.totalReported ?? 0;
+  const resolvedCount = publicAggregateStats?.resolvedCount ?? 0;
+  const verifiedCount = publicAggregateStats?.verifiedCount ?? 0;
+  const inProgressCount = publicAggregateStats?.inProgressCount ?? 0;
   const activeTasksCount = tasks.filter((t) => t.status === 'Assigned' || t.status === 'In Progress').length;
   const participatingHouseholds = users.filter((u) => u.role === 'citizen').length + 40;
+
+  // Explicitly anonymized community lifecycle summary (no private citizen complaints exposed on public homepage)
+  const anonymizedLifecycleSummary = [
+    {
+      stage: 'Stage 1–2: Submitted & Under Verification',
+      description: 'Reports queued for administrative photograph & location verification.',
+      status: 'under_review',
+      metric: `${Math.max(0, totalReported - verifiedCount - inProgressCount - resolvedCount)} active in review`,
+    },
+    {
+      stage: 'Stage 3: Verified Sanitation Reports',
+      description: 'Verified complaints (+10 Green Points credited to reporting citizen).',
+      status: 'verified',
+      metric: `${verifiedCount} verified`,
+    },
+    {
+      stage: 'Stage 4–5: Worker Assigned & Cleaning In Progress',
+      description: 'Field sanitation teams actively cleaning and removing reported waste.',
+      status: 'in_progress',
+      metric: `${inProgressCount} in field cleaning`,
+    },
+    {
+      stage: 'Stage 6: Problem Resolved',
+      description: 'Completed sanitation operations with resolution notes on record.',
+      status: 'resolved',
+      metric: `${resolvedCount} resolved`,
+    },
+  ];
 
   const commonProblems = [
     {
@@ -368,85 +397,45 @@ export default function HomePage() {
           </Link>
         </div>
 
-        {/* Latest Complaint Updates (Privacy-Conscious) */}
+        {/* Anonymized Community Lifecycle & Privacy-Preserving Summary */}
         <div className="lg:col-span-7 bg-white rounded-2xl border border-emerald-100 p-6 shadow-sm flex flex-col justify-between">
           <div>
             <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
               <div>
-                <span className="text-xs font-bold text-emerald-700 uppercase">Live Transparency Feed</span>
+                <span className="text-xs font-bold text-emerald-700 uppercase">Privacy-Protected Aggregate Overview</span>
                 <h2 className="text-xl font-extrabold text-slate-900 mt-0.5">
-                  Latest Community Complaint Updates
+                  Community Complaint Lifecycle Summary
                 </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Individual citizen complaints are strictly private to the reporting citizen and authorized administrators.
+                </p>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsLocationModalOpen(true)}
-                  className="text-[11px] px-2.5 py-1 rounded-full bg-emerald-50 hover:bg-emerald-100 text-forest-800 font-semibold border border-emerald-200"
-                >
-                  {selectedLocation ? `Filtered: ${formatLocationLabel(selectedLocation)}` : 'Filter by Location'}
-                </button>
-              </div>
+              <span className="text-[11px] px-2.5 py-1 rounded-full bg-emerald-50 text-forest-800 font-semibold border border-emerald-200">
+                Aggregate Counts Only
+              </span>
             </div>
 
-            {filteredComplaints.length === 0 ? (
-              <div className="p-8 text-center bg-slate-50 rounded-2xl space-y-2">
-                <p className="text-sm font-bold text-slate-800">
-                  No complaints have been reported for this selected location yet.
-                </p>
-                <div className="flex justify-center gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={clearSelectedLocation}
-                    className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-100 text-forest-900"
-                  >
-                    Show All India Updates
-                  </button>
-                  <Link
-                    to="/report-problem"
-                    className="px-3 py-1.5 rounded-xl text-xs font-bold bg-forest-800 text-white"
-                  >
-                    Report an Issue Here
-                  </Link>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {filteredComplaints.slice(0, 4).map((c) => (
-                  <div
-                    key={c.id}
-                    className="p-3.5 rounded-xl border border-emerald-100 hover:bg-emerald-50/40 transition flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-xs font-bold text-forest-800 bg-emerald-100 px-2 py-0.5 rounded">
-                          {c.id}
-                        </span>
-                        <span className="text-xs font-semibold text-slate-700">{c.category}</span>
-                        <span className="text-[11px] text-slate-400">• Reported by {maskName(c.userName)}</span>
-                      </div>
-                      <p className="text-sm font-bold text-slate-900">{c.title}</p>
-                      <p className="text-xs text-slate-500 flex items-center gap-1">
-                        <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-                        {[c.village_name || c.city_name, c.district_name, c.state_name]
-                          .filter(Boolean)
-                          .join(', ') || c.area}
-                      </p>
-                    </div>
-                    <div className="flex sm:flex-col items-end justify-between gap-2 shrink-0">
-                      <StatusBadge status={c.status} />
-                      <span className="text-[11px] text-slate-400">
-                        {new Date(c.submittedAt).toLocaleDateString()}
-                      </span>
-                    </div>
+            <div className="space-y-3">
+              {anonymizedLifecycleSummary.map((item) => (
+                <div
+                  key={item.stage}
+                  className="p-3.5 rounded-xl border border-emerald-100 hover:bg-emerald-50/40 transition flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                >
+                  <div className="space-y-1">
+                    <p className="text-sm font-bold text-slate-900">{item.stage}</p>
+                    <p className="text-xs text-slate-500">{item.description}</p>
                   </div>
-                ))}
-              </div>
-            )}
+                  <div className="flex sm:flex-col items-end justify-between gap-1.5 shrink-0">
+                    <StatusBadge status={item.status} />
+                    <span className="text-[11px] font-bold text-slate-600">{item.metric}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-            <span>Exact GPS coordinates and personal contact details are protected on public views.</span>
+            <span>Personal complaint details, photos, and coordinates are never exposed publicly.</span>
             <Link to="/citizen/dashboard" className="font-bold text-forest-800 hover:underline">
               Track My Complaints →
             </Link>

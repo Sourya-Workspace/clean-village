@@ -1,35 +1,41 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Leaf, Shield, UserCheck, Lock, Mail, AlertCircle, KeyRound } from 'lucide-react';
+import {
+  Leaf,
+  Shield,
+  UserCheck,
+  Lock,
+  Mail,
+  AlertCircle,
+  KeyRound,
+  CheckCircle2,
+  Database,
+} from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { SINGLE_ADMIN_EMAIL } from '../data/seedData';
 import { INDIA_STATES_AND_UTS, DISTRICTS_BY_STATE } from '../services/geocoding';
 
 const GMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@gmail\.com$/i;
 
 export function LoginPage() {
-  const { login, quickDemoLogin } = useApp();
+  const { login, quickDemoLogin, requestPasswordReset, isSupabaseConfigured } = useApp();
   const navigate = useNavigate();
   const [loginTab, setLoginTab] = useState('citizen');
-  const [email, setEmail] = useState('rameshbabu.pinapadu@gmail.com');
-  const [password, setPassword] = useState('Citizen@123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [resetMessage, setResetMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   const handleSwitchTab = (tab) => {
     setLoginTab(tab);
     setError('');
-    if (tab === 'admin') {
-      setEmail(SINGLE_ADMIN_EMAIL);
-      setPassword('Admin@123');
-    } else {
-      setEmail('rameshbabu.pinapadu@gmail.com');
-      setPassword('Citizen@123');
-    }
+    setResetMessage('');
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setResetMessage('');
     const cleanEmail = (email || '').trim().toLowerCase();
 
     if (!cleanEmail || !password) {
@@ -40,23 +46,40 @@ export function LoginPage() {
       setError('Email ID must be in the format xxxxxx@gmail.com.');
       return;
     }
-    if (loginTab === 'admin' && cleanEmail !== SINGLE_ADMIN_EMAIL) {
-      setError(`There is only one authorized Administrator account (${SINGLE_ADMIN_EMAIL}).`);
+
+    setSubmitting(true);
+    try {
+      const res = await login(cleanEmail, password, loginTab);
+      if (!res.success) {
+        setError(res.error);
+        return;
+      }
+      navigate(res.user.role === 'authority' ? '/authority/dashboard' : '/citizen/dashboard');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    setError('');
+    setResetMessage('');
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail || !GMAIL_REGEX.test(cleanEmail)) {
+      setError('Enter your registered @gmail.com email address above first to request a password reset.');
       return;
     }
-
-    const res = login(cleanEmail, password);
+    const res = await requestPasswordReset(cleanEmail);
     if (!res.success) {
       setError(res.error);
       return;
     }
-    navigate(res.user.role === 'authority' ? '/authority/dashboard' : '/citizen/dashboard');
+    setResetMessage(`Password reset instructions have been sent to ${cleanEmail}.`);
   };
 
-  const handleDemo = (role) => {
-    const user = quickDemoLogin(role);
+  const handleDemo = (role, demoUserId = null) => {
+    const user = quickDemoLogin(role, demoUserId);
     if (user) {
-      navigate(role === 'authority' ? '/authority/dashboard' : '/citizen/dashboard');
+      navigate(user.role === 'authority' ? '/authority/dashboard' : '/citizen/dashboard');
     }
   };
 
@@ -69,12 +92,34 @@ export function LoginPage() {
           </div>
           <h1 className="text-xl font-extrabold">Sign In to CleanVillage</h1>
           <p className="text-xs text-emerald-100">
-            Use your registered <code>xxxxxx@gmail.com</code> Email ID &amp; Password
+            Cross-Device Authentication • Registered <code>xxxxxx@gmail.com</code> &amp; Password
           </p>
         </div>
 
         <div className="p-6 space-y-5">
-          {/* Role Selector Tabs: Citizen vs Single Admin */}
+          {/* Backend Connection Status Banner */}
+          <div
+            className={`p-3 rounded-2xl border text-[11px] flex items-start gap-2 ${
+              isSupabaseConfigured
+                ? 'bg-emerald-50 border-emerald-200 text-forest-900'
+                : 'bg-amber-50 border-amber-200 text-amber-950'
+            }`}
+          >
+            <Database className="w-4 h-4 shrink-0 mt-0.5 text-emerald-700" />
+            <div>
+              {isSupabaseConfigured ? (
+                <span>
+                  <strong>Shared Supabase Backend Active:</strong> Sign in from any laptop or mobile device using your registered account.
+                </span>
+              ) : (
+                <span>
+                  <strong>Local Demo Mode Active:</strong> Supabase environment variables are not configured in <code>.env</code> yet. Configure <code>.env</code> and run <code>npm run provision:admin</code> to enable live cross-device authentication.
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Role Selector Tabs: Citizen vs Provisioned Administrator */}
           <div className="grid grid-cols-2 gap-2 p-1 rounded-2xl bg-slate-100">
             <button
               type="button"
@@ -98,7 +143,7 @@ export function LoginPage() {
               }`}
             >
               <Shield className="w-3.5 h-3.5" />
-              Sole Admin Login
+              Administrator Login
             </button>
           </div>
 
@@ -109,17 +154,26 @@ export function LoginPage() {
             </div>
           )}
 
+          {resetMessage && (
+            <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+              <span>{resetMessage}</span>
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                {loginTab === 'admin' ? 'Sole Admin Gmail ID (@gmail.com) *' : 'Citizen Gmail ID (@gmail.com) *'}
+                {loginTab === 'admin'
+                  ? 'Provisioned Administrator Gmail ID (@gmail.com) *'
+                  : 'Citizen Gmail ID (@gmail.com) *'}
               </label>
               <div className="relative">
                 <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                 <input
                   type="email"
                   required
-                  placeholder="xxxxxx@gmail.com"
+                  placeholder="yourname@gmail.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-xs focus:outline-none focus:border-emerald-600"
@@ -127,13 +181,22 @@ export function LoginPage() {
               </div>
               <p className="text-[11px] text-slate-500 mt-1">
                 {loginTab === 'admin'
-                  ? `Only 1 Admin exists in the system: ${SINGLE_ADMIN_EMAIL}`
+                  ? 'Enter the private Administrator email provisioned via scripts/provision-admin.mjs'
                   : 'Must be a valid @gmail.com address (e.g., xxxxxx@gmail.com)'}
               </p>
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Password *</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-slate-700">Password *</label>
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  className="text-[11px] font-bold text-forest-800 hover:underline"
+                >
+                  Forgot Password?
+                </button>
+              </div>
               <div className="relative">
                 <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                 <input
@@ -149,40 +212,51 @@ export function LoginPage() {
 
             <button
               type="submit"
-              className="w-full py-2.5 rounded-xl text-xs font-bold bg-forest-800 hover:bg-forest-900 text-white shadow-sm transition"
+              disabled={submitting}
+              className="w-full py-2.5 rounded-xl text-xs font-bold bg-forest-800 hover:bg-forest-900 disabled:opacity-50 text-white shadow-sm transition"
             >
-              {loginTab === 'admin' ? 'Sign In as Sole Administrator' : 'Sign In as Citizen'}
+              {submitting
+                ? 'Signing In...'
+                : loginTab === 'admin'
+                ? 'Sign In as Administrator'
+                : 'Sign In as Citizen'}
             </button>
           </form>
 
-          {/* Documented One-Click Demo Accounts for Evaluation */}
-          <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 space-y-2">
-            <p className="text-xs font-bold text-forest-900">Demo Credentials for Evaluation:</p>
-            <div className="text-[11px] text-slate-700 space-y-1">
-              <div>
-                <strong>Citizen:</strong> <code>rameshbabu.pinapadu@gmail.com</code> / <code>Citizen@123</code>
-              </div>
-              <div>
-                <strong>Only 1 Admin:</strong> <code>cleanvillage.admin@gmail.com</code> / <code>Admin@123</code>
+          {/* Local Demo Mode Account Switcher (Only shown when Supabase is not yet configured) */}
+          {!isSupabaseConfigured && (
+            <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 space-y-2">
+              <p className="text-xs font-bold text-forest-900">
+                Local Demo Mode — Multi-Account Privacy &amp; Workflow Tester:
+              </p>
+              <p className="text-[11px] text-slate-600">
+                Switch between Citizen A, Citizen B, and Demo Admin to verify complaint privacy, notifications, and Green Points before connecting Supabase:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => handleDemo('citizen', 'user-citizen-1')}
+                  className="py-1.5 px-2.5 rounded-xl text-[11px] font-bold bg-forest-800 text-white"
+                >
+                  Citizen A (Ramesh)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDemo('citizen', 'user-citizen-2')}
+                  className="py-1.5 px-2.5 rounded-xl text-[11px] font-bold bg-emerald-700 text-white"
+                >
+                  Citizen B (Lakshmi)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDemo('authority', 'user-authority-1')}
+                  className="py-1.5 px-2.5 rounded-xl text-[11px] font-bold bg-amber-500 text-slate-950"
+                >
+                  Demo Admin
+                </button>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => handleDemo('citizen')}
-                className="py-1.5 px-2.5 rounded-xl text-xs font-bold bg-forest-800 text-white"
-              >
-                Quick Citizen Demo
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDemo('authority')}
-                className="py-1.5 px-2.5 rounded-xl text-xs font-bold bg-amber-500 text-slate-950"
-              >
-                Quick Sole Admin
-              </button>
-            </div>
-          </div>
+          )}
 
           <p className="text-xs text-center text-slate-600">
             New to CleanVillage?{' '}
@@ -213,13 +287,14 @@ export function RegisterPage() {
     consent: false,
   });
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   const availableDistricts =
     formData.stateName && DISTRICTS_BY_STATE[formData.stateName]
       ? DISTRICTS_BY_STATE[formData.stateName]
       : [];
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
 
@@ -230,11 +305,9 @@ export function RegisterPage() {
       return;
     }
     if (!GMAIL_REGEX.test(cleanEmail)) {
-      setError('Email ID must be in the format xxxxxx@gmail.com (only @gmail.com addresses are accepted).');
-      return;
-    }
-    if (cleanEmail === SINGLE_ADMIN_EMAIL) {
-      setError('There is only one Admin account in CleanVillage. Please register with your personal @gmail.com ID.');
+      setError(
+        'Email ID must be in the format xxxxxx@gmail.com (only @gmail.com addresses are accepted).'
+      );
       return;
     }
     if (!/^\d{10}$/.test(formData.mobile.trim())) {
@@ -258,12 +331,17 @@ export function RegisterPage() {
       return;
     }
 
-    const res = registerCitizen(formData);
-    if (!res.success) {
-      setError(res.error);
-      return;
+    setSubmitting(true);
+    try {
+      const res = await registerCitizen(formData);
+      if (!res.success) {
+        setError(res.error);
+        return;
+      }
+      navigate('/citizen/dashboard');
+    } finally {
+      setSubmitting(false);
     }
-    navigate('/citizen/dashboard');
   };
 
   return (
@@ -301,7 +379,9 @@ export function RegisterPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Mobile Number (10 digits) *</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Mobile Number (10 digits) *
+              </label>
               <input
                 type="tel"
                 required
@@ -332,11 +412,15 @@ export function RegisterPage() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">State / Union Territory *</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                State / Union Territory *
+              </label>
               <select
                 required
                 value={formData.stateName}
-                onChange={(e) => setFormData({ ...formData, stateName: e.target.value, districtName: '' })}
+                onChange={(e) =>
+                  setFormData({ ...formData, stateName: e.target.value, districtName: '' })
+                }
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white"
               >
                 <option value="">Select State / UT</option>
@@ -368,7 +452,9 @@ export function RegisterPage() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">City, Town, or Village *</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                City, Town, or Village *
+              </label>
               <input
                 type="text"
                 required
@@ -380,7 +466,9 @@ export function RegisterPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Locality / Street / Ward *</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Locality / Street / Ward *
+              </label>
               <input
                 type="text"
                 required
@@ -399,7 +487,9 @@ export function RegisterPage() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Create Password *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Create Password *
+                </label>
                 <input
                   type="password"
                   required
@@ -411,7 +501,9 @@ export function RegisterPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Confirm Created Password *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Confirm Created Password *
+                </label>
                 <input
                   type="password"
                   required
@@ -436,15 +528,16 @@ export function RegisterPage() {
               <Link to="/privacy" className="text-forest-800 font-bold underline">
                 Privacy Policy
               </Link>{' '}
-              and consent to sharing my sanitation reports.
+              and consent to sharing my sanitation reports with authorized sanitation officials.
             </span>
           </label>
 
           <button
             type="submit"
-            className="w-full py-3 rounded-xl text-xs font-bold bg-forest-800 hover:bg-forest-900 text-white shadow-sm transition"
+            disabled={submitting}
+            className="w-full py-3 rounded-xl text-xs font-bold bg-forest-800 hover:bg-forest-900 disabled:opacity-50 text-white shadow-sm transition"
           >
-            Complete Citizen Sign Up &amp; Login
+            {submitting ? 'Creating Citizen Account...' : 'Complete Citizen Sign Up & Login'}
           </button>
 
           <p className="text-xs text-center text-slate-600">

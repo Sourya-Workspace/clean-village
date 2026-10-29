@@ -14,13 +14,13 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import IndiaLocationSelector from './IndiaLocationSelector';
+import NotificationBellPanel from './NotificationBellPanel';
 import { formatLocationLabel } from '../services/geocoding';
 
 export default function Navbar() {
   const {
     currentUser,
     logout,
-    notifications,
     selectedLocation,
     setSelectedLocation,
     clearSelectedLocation,
@@ -29,13 +29,6 @@ export default function Navbar() {
   } = useApp();
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
-
-  const unreadCount = notifications.filter(
-    (n) =>
-      !n.read &&
-      currentUser &&
-      (n.userId === currentUser.id || (currentUser.role === 'authority' && n.targetRole === 'authority'))
-  ).length;
 
   const navItems = [
     { name: 'Home', path: '/' },
@@ -111,18 +104,7 @@ export default function Navbar() {
 
                 {currentUser ? (
                   <div className="flex items-center gap-2">
-                    <Link
-                      to={currentUser.role === 'authority' ? '/authority/notifications' : '/citizen/notifications'}
-                      className="relative p-2 rounded-lg text-slate-600 hover:bg-emerald-50 hover:text-forest-800"
-                      title="Notifications"
-                    >
-                      <Bell className="w-4 h-4" />
-                      {unreadCount > 0 && (
-                        <span className="absolute top-1 right-1 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-                          {unreadCount}
-                        </span>
-                      )}
-                    </Link>
+                    <NotificationBellPanel />
                     <Link
                       to={currentUser.role === 'authority' ? '/authority/dashboard' : '/citizen/dashboard'}
                       className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-forest-800 hover:bg-forest-900 text-white transition"
@@ -160,6 +142,7 @@ export default function Navbar() {
 
               {/* Mobile Controls */}
               <div className="flex items-center gap-1.5 xl:hidden">
+                {currentUser && <NotificationBellPanel />}
                 <button
                   type="button"
                   onClick={() => setIsLocationModalOpen(true)}

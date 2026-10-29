@@ -8,19 +8,51 @@ import {
   AlertTriangle,
   Sparkles,
   Truck,
-  Navigation,
   Search,
   RefreshCw,
   ArrowLeft,
   Info,
+  Lock,
+  Bell,
+  ImageOff,
+  ExternalLink,
+  Check,
+  CheckCheck,
+  Archive,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import DashboardLayout from '../components/DashboardLayout';
-import { StatusBadge, PriorityBadge } from '../components/StatusBadge';
+import {
+  StatusBadge,
+  PriorityBadge,
+  normalizeComplaintStatus,
+  getStatusBadgeLabel,
+} from '../components/StatusBadge';
+import ComplaintProgressTimeline from '../components/ComplaintProgressTimeline';
+import {
+  getNotificationCategoryLabel,
+  getNotificationCategoryBadgeClass,
+} from '../components/NotificationBellPanel';
 import VillageMap from '../components/VillageMap';
 import IndiaLocationSelector from '../components/IndiaLocationSelector';
 import { COMPLAINT_CATEGORIES } from '../data/seedData';
-import { isValidCoordinatePair, formatLocationLabel } from '../services/geocoding';
+import { isValidCoordinatePair } from '../services/geocoding';
+
+function getLatestPublicMessage(complaint, historyEntries = []) {
+  if (Array.isArray(historyEntries) && historyEntries.length > 0) {
+    const last = historyEntries[historyEntries.length - 1];
+    return last.public_update_message || last.publicMessage || last.note || '';
+  }
+  if (Array.isArray(complaint.history) && complaint.history.length > 0) {
+    const last = complaint.history[complaint.history.length - 1];
+    return last.public_update_message || last.publicMessage || '';
+  }
+  if (Array.isArray(complaint.timeline) && complaint.timeline.length > 0) {
+    const last = complaint.timeline[complaint.timeline.length - 1];
+    return last.note || '';
+  }
+  return complaint.authorityRemarks || 'Complaint submitted and awaiting review.';
+}
 
 /* 10. CITIZEN DASHBOARD */
 export function CitizenDashboardPage() {
@@ -28,23 +60,41 @@ export function CitizenDashboardPage() {
     currentUser,
     complaints,
     schedules,
-    notifications,
+    myNotifications,
+    pointTransactions,
+    markNotificationRead,
     sanitationTips,
     selectedLocation,
     matchesLocationFilter,
+    getComplaintHistoryForViewer,
   } = useApp();
+  const navigate = useNavigate();
 
-  const myComplaints = complaints.filter((c) => c.userId === currentUser?.id);
-  const pendingCount = myComplaints.filter((c) => c.status === 'Pending' || c.status === 'Verified').length;
-  const inProgressCount = myComplaints.filter((c) => c.status === 'In Progress').length;
-  const resolvedCount = myComplaints.filter((c) => c.status === 'Resolved').length;
+  // Strict privacy: Only complaints owned by the authenticated citizen
+  const myComplaints = complaints.filter(
+    (c) =>
+      currentUser &&
+      (c.citizen_user_id === currentUser.id || c.userId === currentUser.id)
+  );
+
+  const submittedOrReviewCount = myComplaints.filter((c) =>
+    ['submitted', 'under_review', 'verified', 'reopened'].includes(
+      normalizeComplaintStatus(c.status)
+    )
+  ).length;
+  const inProgressCount = myComplaints.filter((c) =>
+    ['worker_assigned', 'in_progress'].includes(normalizeComplaintStatus(c.status))
+  ).length;
+  const resolvedCount = myComplaints.filter(
+    (c) => normalizeComplaintStatus(c.status) === 'resolved'
+  ).length;
 
   const relevantSchedules = schedules.filter(
     (s) => s.active && matchesLocationFilter(s, selectedLocation)
   );
 
-  const myNotifs = notifications
-    .filter((n) => n.userId === currentUser?.id || n.targetRole === 'citizen')
+  const myRecentTransactions = pointTransactions
+    .filter((t) => currentUser && (t.userId === currentUser.id || t.user_id === currentUser.id))
     .slice(0, 4);
 
   const tipOfTheDay = sanitationTips[0];
@@ -56,7 +106,9 @@ export function CitizenDashboardPage() {
     <DashboardLayout
       role="citizen"
       title={`Namaste, ${currentUser?.fullName || 'Citizen'}!`}
-      subtitle={`Registered Locality: ${currentUser?.householdArea || ''}, ${currentUser?.village || 'India'}`}
+      subtitle={`Registered Locality: ${currentUser?.householdArea || ''}, ${
+        currentUser?.village || 'India'
+      } • Private Citizen Portal`}
       actions={
         <Link
           to="/citizen/submit-complaint"
@@ -74,11 +126,11 @@ export function CitizenDashboardPage() {
           <p className="text-2xl font-extrabold text-slate-900 mt-1">{myComplaints.length}</p>
         </div>
         <div className="bg-white rounded-2xl border border-amber-200 p-4 shadow-sm">
-          <p className="text-[11px] font-bold text-amber-800 uppercase">Pending / Verified</p>
-          <p className="text-2xl font-extrabold text-amber-700 mt-1">{pendingCount}</p>
+          <p className="text-[11px] font-bold text-amber-800 uppercase">Submitted / Verified</p>
+          <p className="text-2xl font-extrabold text-amber-700 mt-1">{submittedOrReviewCount}</p>
         </div>
         <div className="bg-white rounded-2xl border border-purple-200 p-4 shadow-sm">
-          <p className="text-[11px] font-bold text-purple-800 uppercase">In Progress</p>
+          <p className="text-[11px] font-bold text-purple-800 uppercase">Cleaning In Progress</p>
           <p className="text-2xl font-extrabold text-purple-700 mt-1">{inProgressCount}</p>
         </div>
         <div className="bg-white rounded-2xl border border-emerald-200 p-4 shadow-sm">
@@ -97,24 +149,37 @@ export function CitizenDashboardPage() {
           <Sparkles className="w-5 h-5" />
         </div>
         <div>
-          <span className="text-[11px] font-bold uppercase text-emerald-800">Sanitation Tip of the Day</span>
+          <span className="text-[11px] font-bold uppercase text-emerald-800">
+            Sanitation Tip of the Day
+          </span>
           <p className="text-xs sm:text-sm text-emerald-950 font-medium mt-0.5">{tipOfTheDay}</p>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* My Recent Complaints & Timeline */}
+        {/* Left Column: MY COMPLAINTS (Live Status Tracker - Section 3 & Section 6) */}
         <div className="lg:col-span-7 bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-extrabold text-slate-900">My Recent Complaints (Private Record)</h2>
-            <Link to="/citizen/complaints" className="text-xs font-bold text-forest-800 hover:underline">
-              View All ({myComplaints.length})
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <h2 className="text-base font-extrabold text-slate-900">My Complaints</h2>
+              <p className="text-[11px] text-slate-500">
+                Strict Privacy: Showing only complaints submitted by your account (
+                {currentUser?.email})
+              </p>
+            </div>
+            <Link
+              to="/citizen/complaints"
+              className="text-xs font-bold text-forest-800 hover:underline"
+            >
+              View All ({myComplaints.length}) →
             </Link>
           </div>
 
           {myComplaints.length === 0 ? (
             <div className="p-6 text-center bg-slate-50 rounded-xl space-y-2">
-              <p className="text-xs text-slate-600">You have not submitted any complaints yet.</p>
+              <p className="text-xs text-slate-600">
+                You have not submitted any sanitation complaints yet.
+              </p>
               <Link
                 to="/citizen/submit-complaint"
                 className="inline-block px-4 py-2 rounded-xl text-xs font-bold bg-forest-800 text-white"
@@ -123,47 +188,93 @@ export function CitizenDashboardPage() {
               </Link>
             </div>
           ) : (
-            <div className="space-y-3">
-              {myComplaints.slice(0, 3).map((c) => (
-                <div
-                  key={c.id}
-                  className="p-3.5 rounded-xl border border-slate-200/80 hover:border-emerald-300 transition space-y-2"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-xs font-bold text-forest-900 bg-emerald-100 px-2 py-0.5 rounded">
-                      {c.id}
-                    </span>
-                    <StatusBadge status={c.status} />
+            <div className="space-y-4">
+              {myComplaints.slice(0, 4).map((c) => {
+                const hist = getComplaintHistoryForViewer(c.id);
+                const latestMsg = getLatestPublicMessage(c, hist);
+                return (
+                  <div
+                    key={c.id}
+                    className="p-4 rounded-2xl border border-slate-200/90 hover:border-emerald-300 transition space-y-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1 flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-xs font-bold text-forest-900 bg-emerald-100 px-2 py-0.5 rounded">
+                            {c.id}
+                          </span>
+                          <StatusBadge status={c.status} />
+                          <span className="text-[11px] font-semibold text-slate-500">
+                            {c.category}
+                          </span>
+                        </div>
+                        <h3 className="text-sm font-extrabold text-slate-900">{c.title}</h3>
+                        <p className="text-xs text-slate-600">📍 {c.area}</p>
+                      </div>
+
+                      {c.photoUrl ? (
+                        <img
+                          src={c.photoUrl}
+                          alt={c.title}
+                          className="w-20 h-16 rounded-xl object-cover border border-slate-200 shrink-0"
+                        />
+                      ) : (
+                        <div className="w-20 h-16 rounded-xl bg-slate-100 border border-slate-200 flex flex-col items-center justify-center text-[10px] text-slate-400 shrink-0 p-1 text-center">
+                          <ImageOff className="w-3.5 h-3.5 mb-0.5" />
+                          <span>No Photo</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-100 text-xs text-slate-700">
+                      <span className="font-bold text-forest-900">Latest Status Update: </span>
+                      <span>{latestMsg}</span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 pt-1">
+                      <div>
+                        <span>Submitted: {new Date(c.submittedAt).toLocaleDateString()}</span>
+                        <span className="mx-1.5">•</span>
+                        <span>
+                          Last Updated:{' '}
+                          {new Date(c.updatedAt || c.submittedAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Link
+                          to={`/citizen/complaints/${c.id}`}
+                          className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 transition"
+                        >
+                          View Details
+                        </Link>
+                        <Link
+                          to={`/citizen/complaints/${c.id}#progress`}
+                          className="px-3 py-1.5 rounded-xl text-xs font-bold bg-forest-800 hover:bg-forest-900 text-white transition"
+                        >
+                          View Progress →
+                        </Link>
+                      </div>
+                    </div>
                   </div>
-                  <p className="text-sm font-bold text-slate-900">{c.title}</p>
-                  <p className="text-xs text-slate-500">
-                    {c.category} • {c.area} • {new Date(c.submittedAt).toLocaleDateString()}
-                  </p>
-                  <div className="pt-1 flex items-center justify-between text-xs">
-                    <span className="text-slate-500">
-                      Location Review: <strong>{c.location_review_status || 'Not Reviewed'}</strong>
-                    </span>
-                    <Link
-                      to={`/citizen/complaints/${c.id}`}
-                      className="font-bold text-forest-800 hover:underline"
-                    >
-                      Track Full Timeline →
-                    </Link>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
 
-        {/* Right Column: Green Points Progress, Schedule & Notifications */}
+        {/* Right Column: Green Points Balance & History, Notifications, Schedule */}
         <div className="lg:col-span-5 space-y-6">
-          {/* Green Points Progress Card */}
+          {/* Green Points Balance & Recent Transactions */}
           <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-extrabold text-slate-900">Green Points Progress</h2>
-              <Link to="/citizen/rewards" className="text-xs font-bold text-emerald-700 hover:underline">
-                Redeem Rewards →
+              <h2 className="text-sm font-extrabold text-slate-900">
+                Green Points Balance &amp; History
+              </h2>
+              <Link
+                to="/citizen/rewards"
+                className="text-xs font-bold text-emerald-700 hover:underline"
+              >
+                Open Green Rewards →
               </Link>
             </div>
             <div className="w-full h-3 rounded-full bg-emerald-100 overflow-hidden">
@@ -173,12 +284,90 @@ export function CitizenDashboardPage() {
               />
             </div>
             <p className="text-xs text-slate-600">
-              You have <strong>{currentPts} pts</strong> (
+              Confirmed Balance: <strong>{currentPts} pts</strong> (
               {nextMilestone - currentPts > 0
                 ? `${nextMilestone - currentPts} pts to Cleanliness Champion tier`
                 : 'Champion Tier Reached!'}
               ).
             </p>
+
+            {myRecentTransactions.length > 0 && (
+              <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                <p className="text-[11px] font-bold text-slate-500 uppercase">
+                  Recent Points Transactions
+                </p>
+                {myRecentTransactions.map((tx) => (
+                  <div
+                    key={tx.id}
+                    className="flex items-center justify-between text-xs bg-slate-50 px-2.5 py-1.5 rounded-lg"
+                  >
+                    <span className="truncate text-slate-700 pr-2">{tx.reason}</span>
+                    <span
+                      className={`font-extrabold shrink-0 ${
+                        tx.points > 0 ? 'text-emerald-700' : 'text-amber-700'
+                      }`}
+                    >
+                      {tx.points > 0 ? `+${tx.points}` : tx.points} pts
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Notification Center Preview */}
+          <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-extrabold text-slate-900">Notification Center</h2>
+              <Link
+                to="/citizen/notifications"
+                className="text-xs font-bold text-forest-800 hover:underline"
+              >
+                View All ({myNotifications.length})
+              </Link>
+            </div>
+            {myNotifications.length === 0 ? (
+              <p className="text-xs text-slate-500 py-2">
+                You&apos;re all caught up! New updates will appear here.
+              </p>
+            ) : (
+              myNotifications.slice(0, 4).map((n) => {
+                const isRead = Boolean(n.is_read ?? n.read);
+                const complaintId =
+                  n.related_complaint_id || n.relatedComplaintId || n.metadata?.complaint_id;
+                return (
+                  <button
+                    key={n.id}
+                    type="button"
+                    onClick={() => {
+                      if (!isRead) markNotificationRead(n.id);
+                      if (n.type === 'green_points' || n.type === 'reward') {
+                        navigate('/citizen/rewards');
+                      } else if (complaintId) {
+                        navigate(`/citizen/complaints/${complaintId}`);
+                      } else {
+                        navigate('/citizen/notifications');
+                      }
+                    }}
+                    className={`w-full text-left p-3 rounded-xl border text-xs transition ${
+                      isRead
+                        ? 'bg-slate-50 border-slate-200/70'
+                        : 'bg-emerald-50/80 border-emerald-300 shadow-sm'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-slate-900">{n.title}</span>
+                      {!isRead && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-emerald-600 text-white text-[9px] font-bold">
+                          NEW
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-slate-600 mt-0.5">{n.message}</p>
+                  </button>
+                );
+              })
+            )}
           </div>
 
           {/* Upcoming Waste Collection */}
@@ -206,35 +395,22 @@ export function CitizenDashboardPage() {
               ))
             )}
           </div>
-
-          {/* Latest Notifications */}
-          <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm space-y-2.5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-extrabold text-slate-900">Latest Notifications</h2>
-              <Link to="/citizen/notifications" className="text-xs font-bold text-forest-800 hover:underline">
-                All Alerts
-              </Link>
-            </div>
-            {myNotifs.map((n) => (
-              <div key={n.id} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/60 text-xs">
-                <p className="font-bold text-slate-800">{n.title}</p>
-                <p className="text-slate-600 mt-0.5">{n.message}</p>
-              </div>
-            ))}
-          </div>
         </div>
       </div>
     </DashboardLayout>
   );
 }
 
-/* 11. SUBMIT COMPLAINT PAGE (Captures India-Wide Issue Location via GPS or Manual/Map Selection) */
+/* 11. SUBMIT COMPLAINT PAGE */
 export function SubmitComplaintPage() {
   const {
+    currentUser,
     complaints,
     submitComplaint,
     findSimilarComplaints,
     selectedLocation,
+    quickDemoLogin,
+    isSupabaseConfigured,
   } = useApp();
 
   const [title, setTitle] = useState('');
@@ -242,7 +418,6 @@ export function SubmitComplaintPage() {
   const [description, setDescription] = useState('');
   const [urgency, setUrgency] = useState('Medium');
 
-  // Reported Issue Location State
   const [issueLocation, setIssueLocation] = useState(() => ({
     stateName: selectedLocation?.stateName || '',
     districtName: selectedLocation?.districtName || '',
@@ -263,6 +438,42 @@ export function SubmitComplaintPage() {
   const [photoError, setPhotoError] = useState('');
   const [formError, setFormError] = useState('');
   const [submittedRecord, setSubmittedRecord] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  if (!currentUser) {
+    return (
+      <div className="max-w-lg mx-auto px-4 py-16">
+        <div className="bg-white rounded-3xl border border-emerald-100 p-8 shadow-sm text-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-forest-800 flex items-center justify-center mx-auto">
+            <Lock className="w-6 h-6" />
+          </div>
+          <h2 className="text-xl font-extrabold text-slate-900">
+            Sign In to Submit a Sanitation Complaint
+          </h2>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Every sanitation complaint is linked privately to your citizen account so you can receive real-time status notifications and Green Points.
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            <Link
+              to="/login"
+              className="px-5 py-2.5 rounded-xl text-xs font-bold bg-forest-800 text-white"
+            >
+              Sign In with @gmail.com
+            </Link>
+            {!isSupabaseConfigured && (
+              <button
+                type="button"
+                onClick={() => quickDemoLogin('citizen', 'user-citizen-1')}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-emerald-100 text-forest-900"
+              >
+                Continue as Demo Citizen A
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const nextIdPreview = `CV-2026-${String(complaints.length + 1).padStart(4, '0')}`;
   const similarExisting = findSimilarComplaints(
@@ -295,7 +506,7 @@ export function SubmitComplaintPage() {
     reader.readAsDataURL(file);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setFormError('');
 
@@ -316,26 +527,33 @@ export function SubmitComplaintPage() {
 
     const hasValidCoords = isValidCoordinatePair(issueLocation.lat, issueLocation.lng);
 
-    const res = submitComplaint({
-      title,
-      category,
-      description,
-      state_name: issueLocation.stateName,
-      district_name: issueLocation.districtName,
-      city_name: issueLocation.cityOrVillage,
-      village_name: issueLocation.cityOrVillage,
-      locality: issueLocation.locality,
-      landmark: landmark || issueLocation.landmark,
-      reported_latitude: hasValidCoords ? Number(issueLocation.lat) : null,
-      reported_longitude: hasValidCoords ? Number(issueLocation.lng) : null,
-      location_capture_method: issueLocation.locationCaptureMethod,
-      location_confirmation_status: issueLocation.locationConfirmationStatus,
-      urgency,
-      photoUrl: photoPreview,
-    });
+    setSubmitting(true);
+    try {
+      const res = await submitComplaint({
+        title,
+        category,
+        description,
+        state_name: issueLocation.stateName,
+        district_name: issueLocation.districtName,
+        city_name: issueLocation.cityOrVillage,
+        village_name: issueLocation.cityOrVillage,
+        locality: issueLocation.locality,
+        landmark: landmark || issueLocation.landmark,
+        reported_latitude: hasValidCoords ? Number(issueLocation.lat) : null,
+        reported_longitude: hasValidCoords ? Number(issueLocation.lng) : null,
+        location_capture_method: issueLocation.locationCaptureMethod,
+        location_confirmation_status: issueLocation.locationConfirmationStatus,
+        urgency,
+        photoUrl: photoPreview,
+      });
 
-    if (res.success) {
+      if (!res.success) {
+        setFormError(res.error || 'Failed to submit complaint.');
+        return;
+      }
       setSubmittedRecord(res.complaint);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -343,35 +561,51 @@ export function SubmitComplaintPage() {
     return (
       <DashboardLayout
         role="citizen"
-        title="Sanitation Complaint Submitted Successfully"
-        subtitle="Your complaint and its reported location details have been recorded for Authority verification."
+        title="Complaint Submitted"
+        subtitle="Your sanitation complaint has been recorded and an alert has been sent to the Administrator."
       >
         <div className="bg-white rounded-3xl border border-emerald-200 p-8 shadow-sm text-center max-w-xl mx-auto space-y-5">
           <div className="w-16 h-16 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto">
             <CheckCircle2 className="w-9 h-9" />
           </div>
           <div className="space-y-1">
-            <span className="text-xs font-bold uppercase text-emerald-700">Generated Complaint ID</span>
+            <span className="text-xs font-bold uppercase text-emerald-700">
+              Confirmed Complaint ID
+            </span>
             <p className="text-3xl font-black font-mono text-forest-900">{submittedRecord.id}</p>
+            <p className="text-xs text-slate-600 pt-1">
+              Your sanitation complaint has been submitted successfully. Complaint ID:{' '}
+              <strong>{submittedRecord.id}</strong>. We will notify you when its status changes.
+            </p>
           </div>
           <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-left text-xs space-y-1.5 text-slate-700">
-            <div><strong>Title:</strong> {submittedRecord.title}</div>
-            <div><strong>Category:</strong> {submittedRecord.category}</div>
-            <div><strong>Reported Location:</strong> {submittedRecord.area}</div>
             <div>
-              <strong>State / District:</strong> {submittedRecord.state_name || '—'} /{' '}
-              {submittedRecord.district_name || '—'}
+              <strong>Title:</strong> {submittedRecord.title}
+            </div>
+            <div>
+              <strong>Category:</strong> {submittedRecord.category}
+            </div>
+            <div>
+              <strong>Reported Location:</strong> {submittedRecord.area}
             </div>
             <div>
               <strong>Coordinates:</strong>{' '}
-              {isValidCoordinatePair(submittedRecord.reported_latitude, submittedRecord.reported_longitude)
+              {isValidCoordinatePair(
+                submittedRecord.reported_latitude,
+                submittedRecord.reported_longitude
+              )
                 ? `${submittedRecord.reported_latitude}° N, ${submittedRecord.reported_longitude}° E`
                 : 'Not provided (Manual address entry)'}
             </div>
             <div>
-              <strong>Location Capture Method:</strong> {submittedRecord.location_confirmation_status}
+              <strong>Photograph:</strong>{' '}
+              {submittedRecord.photoUrl
+                ? 'Attached and stored with complaint'
+                : 'No photograph was attached to this complaint.'}
             </div>
-            <div><strong>Initial Status:</strong> <StatusBadge status={submittedRecord.status} /></div>
+            <div>
+              <strong>Current Status:</strong> <StatusBadge status={submittedRecord.status} />
+            </div>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
             <Link
@@ -402,15 +636,15 @@ export function SubmitComplaintPage() {
     <DashboardLayout
       role="citizen"
       title="Report a Community Sanitation Issue"
-      subtitle="Provide issue details, photographic evidence, and the location of the reported sanitation problem anywhere in India."
+      subtitle="Provide issue details, optional photographic evidence, and the location of the reported sanitation problem anywhere in India."
     >
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="bg-white rounded-2xl border border-emerald-100 p-6 shadow-sm space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-100">
             <div className="text-xs text-slate-600">
-              Auto-Assigned Complaint ID Reference:{' '}
-              <span className="font-mono font-bold text-forest-900 bg-emerald-100 px-2 py-0.5 rounded">
-                {nextIdPreview}
+              Submitting as:{' '}
+              <span className="font-bold text-forest-900">
+                {currentUser.fullName} ({currentUser.email})
               </span>
             </div>
             <span className="text-xs text-slate-500">
@@ -424,7 +658,6 @@ export function SubmitComplaintPage() {
             </div>
           )}
 
-          {/* Duplicate Complaint Warning */}
           {similarExisting.length > 0 && (
             <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-xs text-amber-900 space-y-1">
               <div className="flex items-center gap-2 font-bold">
@@ -432,15 +665,18 @@ export function SubmitComplaintPage() {
                 <span>Similar Recent Complaint Notice (Area &amp; Category Match)</span>
               </div>
               <p>
-                There is already an active <strong>{category}</strong> report in this area (ID:{' '}
-                <code>{similarExisting[0].id}</code> – Status: {similarExisting[0].status}). You may still submit your report if this is a distinct spot or additional evidence.
+                You already have an active <strong>{category}</strong> report in this area (ID:{' '}
+                <code>{similarExisting[0].id}</code> – Status:{' '}
+                {getStatusBadgeLabel(similarExisting[0].status)}).
               </p>
             </div>
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
             <div className="md:col-span-2">
-              <label className="block text-xs font-bold text-slate-700 mb-1">Complaint Title *</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Complaint Title *
+              </label>
               <input
                 type="text"
                 required
@@ -452,7 +688,9 @@ export function SubmitComplaintPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Complaint Category *</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Complaint Category *
+              </label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
@@ -469,7 +707,9 @@ export function SubmitComplaintPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
             <div className="md:col-span-3">
-              <label className="block text-xs font-bold text-slate-700 mb-1">Detailed Description *</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Detailed Description *
+              </label>
               <textarea
                 rows={3}
                 required
@@ -492,7 +732,9 @@ export function SubmitComplaintPage() {
                 <option value="High">High (School/Health/Drain Blockage)</option>
               </select>
 
-              <label className="block text-xs font-bold text-slate-700 mt-3 mb-1">Nearby Landmark</label>
+              <label className="block text-xs font-bold text-slate-700 mt-3 mb-1">
+                Nearby Landmark
+              </label>
               <input
                 type="text"
                 value={landmark}
@@ -509,7 +751,8 @@ export function SubmitComplaintPage() {
           <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 flex items-start gap-2.5">
             <Info className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
             <div>
-              <strong>Important – Location of the Sanitation Problem:</strong> Select the exact location where the sanitation problem exists. If you are standing at the spot, click <strong>"Use My Current Location"</strong> (requires browser GPS permission). If you are reporting an issue located elsewhere—or if GPS is denied—search any village, town, city, or street across India or click on the map below, then click <strong>"Confirm Location"</strong>.
+              <strong>Location of the Sanitation Problem:</strong> Select the exact location where the sanitation problem exists anywhere in India, then click{' '}
+              <strong>&quot;Confirm Location&quot;</strong>.
             </div>
           </div>
 
@@ -530,7 +773,8 @@ export function SubmitComplaintPage() {
                 lat: null,
                 lng: null,
                 locationCaptureMethod: 'manual_entry',
-                locationConfirmationStatus: 'Manually Entered Address (No Map Coordinates)',
+                locationConfirmationStatus:
+                  'Manually Entered Address (No Map Coordinates)',
                 isConfirmed: false,
               })
             }
@@ -548,9 +792,11 @@ export function SubmitComplaintPage() {
                 <Upload className="w-5 h-5" />
               </div>
               <div>
-                <p className="text-xs font-bold text-slate-800">Select an image of the sanitation issue</p>
+                <p className="text-xs font-bold text-slate-800">
+                  Attach actual photograph of the reported sanitation issue
+                </p>
                 <p className="text-[11px] text-slate-500">
-                  If no file is chosen in demo mode, a clearly labeled Demo Evidence illustration is attached.
+                  Uploaded photographs are transmitted to the Administrator Incoming Complaints console. If no image is attached, the complaint will state &quot;No photograph was attached to this complaint.&quot;
                 </p>
               </div>
             </div>
@@ -564,7 +810,9 @@ export function SubmitComplaintPage() {
           {photoError && <p className="text-xs text-red-600 font-medium">{photoError}</p>}
           {photoPreview && (
             <div className="mt-2">
-              <p className="text-xs font-semibold text-emerald-800 mb-1">Image Preview Before Submission:</p>
+              <p className="text-xs font-semibold text-emerald-800 mb-1">
+                Attached Photograph Preview:
+              </p>
               <img
                 src={photoPreview}
                 alt="Complaint preview"
@@ -582,9 +830,10 @@ export function SubmitComplaintPage() {
             </div>
             <button
               type="submit"
-              className="px-6 py-3 rounded-xl text-xs font-bold bg-forest-800 hover:bg-forest-900 text-white shadow-sm transition"
+              disabled={submitting}
+              className="px-6 py-3 rounded-xl text-xs font-bold bg-forest-800 hover:bg-forest-900 disabled:opacity-50 text-white shadow-sm transition"
             >
-              Submit Sanitation Complaint ({nextIdPreview})
+              {submitting ? 'Submitting...' : `Submit Sanitation Complaint`}
             </button>
           </div>
         </div>
@@ -595,13 +844,16 @@ export function SubmitComplaintPage() {
 
 /* 12. MY COMPLAINTS PAGE */
 export function MyComplaintsPage() {
-  const { currentUser, complaints } = useApp();
+  const { currentUser, complaints, getComplaintHistoryForViewer } = useApp();
   const [statusFilter, setStatusFilter] = useState('All');
   const [search, setSearch] = useState('');
 
+  // Mandatory Citizen Privacy: Only show complaints belonging to the authenticated citizen
   const myComplaints = complaints.filter((c) => {
-    if (currentUser && c.userId !== currentUser.id) return false;
-    const matchesStatus = statusFilter === 'All' || c.status === statusFilter;
+    if (!currentUser) return false;
+    if (c.citizen_user_id !== currentUser.id && c.userId !== currentUser.id) return false;
+    const canonicalStatus = normalizeComplaintStatus(c.status);
+    const matchesStatus = statusFilter === 'All' || canonicalStatus === statusFilter;
     const matchesSearch =
       c.id.toLowerCase().includes(search.toLowerCase()) ||
       c.title.toLowerCase().includes(search.toLowerCase()) ||
@@ -613,8 +865,8 @@ export function MyComplaintsPage() {
   return (
     <DashboardLayout
       role="citizen"
-      title="My Submitted Complaints"
-      subtitle="View and track all sanitation complaints submitted from your citizen account."
+      title="My Complaints"
+      subtitle="Live complaint status tracker for reports submitted from your personal citizen account."
       actions={
         <Link
           to="/citizen/submit-complaint"
@@ -632,75 +884,175 @@ export function MyComplaintsPage() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by Complaint ID, title, village, city, or state..."
+            placeholder="Search your complaints by ID, title, village, city, or state..."
             className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-xs"
           />
         </div>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="px-3 py-2 rounded-xl border border-slate-200 text-xs"
+          className="px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white"
         >
-          <option value="All">All Statuses</option>
-          <option value="Pending">Pending</option>
-          <option value="Verified">Verified</option>
-          <option value="In Progress">In Progress</option>
-          <option value="Resolved">Resolved</option>
-          <option value="Rejected">Rejected</option>
+          <option value="All">All Lifecycle Statuses</option>
+          <option value="submitted">Submitted</option>
+          <option value="under_review">Under Verification</option>
+          <option value="verified">Verified</option>
+          <option value="worker_assigned">Worker Assigned</option>
+          <option value="in_progress">Cleaning In Progress</option>
+          <option value="resolved">Resolved</option>
+          <option value="reopened">Reopened</option>
+          <option value="rejected">Not Approved</option>
         </select>
       </div>
 
-      <div className="space-y-4">
-        {myComplaints.map((c) => (
-          <div
-            key={c.id}
-            className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4"
+      {myComplaints.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-emerald-100 p-8 text-center space-y-3">
+          <p className="text-sm font-bold text-slate-800">
+            No matching complaints found in your account.
+          </p>
+          <Link
+            to="/citizen/submit-complaint"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-forest-800 text-white"
           >
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-mono text-xs font-bold bg-emerald-100 text-forest-900 px-2.5 py-0.5 rounded">
-                  {c.id}
-                </span>
-                <StatusBadge status={c.status} />
-                <PriorityBadge priority={c.urgency} />
-                <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700">
-                  {c.location_confirmation_status}
-                </span>
-              </div>
-              <h3 className="text-base font-bold text-slate-900">{c.title}</h3>
-              <p className="text-xs text-slate-600">{c.description}</p>
-              <p className="text-xs text-slate-500">
-                📍 {c.area} • Submitted: {new Date(c.submittedAt).toLocaleString()}
-              </p>
-            </div>
-            <div className="shrink-0">
-              <Link
-                to={`/citizen/complaints/${c.id}`}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-forest-900 border border-emerald-200"
+            <PlusCircle className="w-4 h-4" />
+            Submit a New Sanitation Complaint
+          </Link>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {myComplaints.map((c) => {
+            const hist = getComplaintHistoryForViewer(c.id);
+            const latestMessage = getLatestPublicMessage(c, hist);
+            return (
+              <div
+                key={c.id}
+                className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-5"
               >
-                View Details &amp; Timeline →
-              </Link>
-            </div>
-          </div>
-        ))}
-      </div>
+                <div className="flex flex-col sm:flex-row items-start gap-4 flex-1">
+                  {c.photoUrl ? (
+                    <img
+                      src={c.photoUrl}
+                      alt={c.title}
+                      className="w-full sm:w-32 h-28 rounded-xl object-cover border border-slate-200 shrink-0"
+                    />
+                  ) : (
+                    <div className="w-full sm:w-32 h-28 rounded-xl bg-slate-100 border border-slate-200 flex flex-col items-center justify-center text-xs text-slate-400 shrink-0 p-2 text-center">
+                      <ImageOff className="w-5 h-5 mb-1" />
+                      <span>No Photograph Attached</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-xs font-bold bg-emerald-100 text-forest-900 px-2.5 py-0.5 rounded">
+                        {c.id}
+                      </span>
+                      <StatusBadge status={c.status} />
+                      <PriorityBadge priority={c.urgency} />
+                      <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700">
+                        {c.category}
+                      </span>
+                    </div>
+                    <h3 className="text-base font-bold text-slate-900">{c.title}</h3>
+                    <p className="text-xs text-slate-600">{c.description}</p>
+                    <p className="text-xs text-slate-500">
+                      📍 <strong>Reported Location:</strong> {c.area}
+                    </p>
+                    <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-100 text-xs text-slate-700">
+                      <span className="font-bold text-forest-900">Latest Update: </span>
+                      <span>{latestMessage}</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 pt-0.5">
+                      <span>Submitted: {new Date(c.submittedAt).toLocaleString()}</span>
+                      <span>•</span>
+                      <span>
+                        Last Updated: {new Date(c.updatedAt || c.submittedAt).toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex sm:flex-row lg:flex-col gap-2 shrink-0">
+                  <Link
+                    to={`/citizen/complaints/${c.id}`}
+                    className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-forest-900 border border-emerald-200"
+                  >
+                    View Details
+                  </Link>
+                  <Link
+                    to={`/citizen/complaints/${c.id}#progress`}
+                    className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-forest-800 hover:bg-forest-900 text-white"
+                  >
+                    View Progress →
+                  </Link>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </DashboardLayout>
   );
 }
 
-/* 13. COMPLAINT DETAILS AND TRACKING PAGE */
+/* 13. COMPLAINT DETAILS AND TRACKING PAGE (Enforces Strict Ownership Check) */
 export function CitizenComplaintDetailPage() {
   const { id } = useParams();
-  const { complaints, resubmitRejectedComplaint } = useApp();
-  const complaint = complaints.find((c) => c.id === id) || complaints[0];
+  const {
+    getAuthorizedComplaintById,
+    getComplaintHistoryForViewer,
+    resubmitRejectedComplaint,
+  } = useApp();
+
+  const { complaint, unauthorized } = getAuthorizedComplaintById(id);
+  const historyEntries = complaint ? getComplaintHistoryForViewer(complaint.id) : [];
 
   const [editTitle, setEditTitle] = useState(complaint?.title || '');
   const [editDesc, setEditDesc] = useState(complaint?.description || '');
+  const [imgLoadError, setImgLoadError] = useState(false);
+
+  if (unauthorized) {
+    return (
+      <DashboardLayout
+        role="citizen"
+        title="Access Denied — Private Complaint Record"
+        subtitle="Citizens are strictly restricted to viewing only the complaints they personally submitted."
+      >
+        <div className="bg-white rounded-3xl border border-red-200 p-8 shadow-sm text-center max-w-lg mx-auto space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-red-100 text-red-700 flex items-center justify-center mx-auto">
+            <Lock className="w-6 h-6" />
+          </div>
+          <h2 className="text-lg font-extrabold text-slate-900">
+            Unauthorized Access Denied (403)
+          </h2>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            You do not have permission to view complaint <code>{id}</code> because it belongs to another citizen account. CleanVillage enforces strict Row Level Security and ownership checks.
+          </p>
+          <Link
+            to="/citizen/complaints"
+            className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs font-bold bg-forest-800 text-white"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Return to My Complaints
+          </Link>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   if (!complaint) {
     return (
       <DashboardLayout role="citizen" title="Complaint Not Found">
-        <p className="text-xs text-slate-600">No complaint found with ID {id}.</p>
+        <div className="bg-white rounded-2xl border border-emerald-100 p-6 space-y-3">
+          <p className="text-xs text-slate-600">No complaint found with ID {id}.</p>
+          <Link
+            to="/citizen/complaints"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-forest-800 text-white"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to My Complaints
+          </Link>
+        </div>
       </DashboardLayout>
     );
   }
@@ -742,34 +1094,67 @@ export function CitizenComplaintDetailPage() {
             </div>
 
             <h2 className="text-lg font-extrabold text-slate-900">{complaint.title}</h2>
-            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">{complaint.description}</p>
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+              {complaint.description}
+            </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-xl bg-slate-50 border border-slate-200/70 text-xs">
-              <div><strong>Complaint ID:</strong> {complaint.id}</div>
-              <div><strong>Category:</strong> {complaint.category}</div>
-              <div><strong>State / District:</strong> {complaint.state_name || '—'} / {complaint.district_name || '—'}</div>
-              <div><strong>City / Village:</strong> {complaint.village_name || complaint.city_name || '—'}</div>
-              <div><strong>Locality / Landmark:</strong> {complaint.locality || '—'} {complaint.landmark ? `(${complaint.landmark})` : ''}</div>
-              <div><strong>Capture Method:</strong> {complaint.location_confirmation_status}</div>
-              <div><strong>Location Review:</strong> {complaint.location_review_status || 'Not Reviewed'}</div>
-              <div><strong>Assigned Team:</strong> {complaint.assignedTeam || 'Pending Assignment'}</div>
+              <div>
+                <strong>Complaint ID:</strong> {complaint.id}
+              </div>
+              <div>
+                <strong>Category:</strong> {complaint.category}
+              </div>
+              <div>
+                <strong>State / District:</strong> {complaint.state_name || '—'} /{' '}
+                {complaint.district_name || '—'}
+              </div>
+              <div>
+                <strong>City / Village:</strong>{' '}
+                {complaint.village_name || complaint.city_name || '—'}
+              </div>
+              <div>
+                <strong>Locality / Landmark:</strong> {complaint.locality || '—'}{' '}
+                {complaint.landmark ? `(${complaint.landmark})` : ''}
+              </div>
+              <div>
+                <strong>Capture Method:</strong> {complaint.location_confirmation_status}
+              </div>
+              <div>
+                <strong>Submission Date:</strong>{' '}
+                {new Date(complaint.submittedAt).toLocaleString()}
+              </div>
+              <div>
+                <strong>Last Updated:</strong>{' '}
+                {new Date(complaint.updatedAt || complaint.submittedAt).toLocaleString()}
+              </div>
+              <div className="sm:col-span-2">
+                <strong>Assigned Sanitation Team:</strong>{' '}
+                {complaint.assignedTeam || 'Pending Worker Assignment'}
+              </div>
             </div>
 
             {complaint.authorityRemarks && (
               <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs space-y-1">
-                <p className="font-bold text-forest-900">Official Authority Remarks:</p>
+                <p className="font-bold text-forest-900">Public Status Update Note:</p>
                 <p className="text-emerald-950">{complaint.authorityRemarks}</p>
               </div>
             )}
 
-            {/* If Rejected: Show Rejection Reason & Resubmit Form */}
-            {complaint.status === 'Rejected' && (
+            {/* If Not Approved (rejected): Show Explanation & Reopen Form */}
+            {normalizeComplaintStatus(complaint.status) === 'rejected' && (
               <div className="p-4 rounded-2xl bg-red-50 border border-red-200 space-y-3">
                 <p className="text-xs font-bold text-red-800">
-                  Rejection Reason: {complaint.rejectionReason || 'Requires clarification.'}
+                  Review Explanation:{' '}
+                  {complaint.rejectionReason || 'Requires additional clarification.'}
                 </p>
-                <form onSubmit={handleResubmit} className="space-y-3 pt-2 border-t border-red-200">
-                  <p className="text-xs font-bold text-slate-800">Correct &amp; Resubmit This Complaint:</p>
+                <form
+                  onSubmit={handleResubmit}
+                  className="space-y-3 pt-2 border-t border-red-200"
+                >
+                  <p className="text-xs font-bold text-slate-800">
+                    Correct Details &amp; Reopen This Complaint:
+                  </p>
                   <input
                     type="text"
                     value={editTitle}
@@ -787,7 +1172,7 @@ export function CitizenComplaintDetailPage() {
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-forest-800 text-white"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    Resubmit Corrected Report
+                    Reopen Complaint with Updated Details
                   </button>
                 </form>
               </div>
@@ -799,16 +1184,32 @@ export function CitizenComplaintDetailPage() {
             <h3 className="text-sm font-extrabold text-slate-900">Photographic Evidence</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <p className="text-xs font-semibold text-slate-600 mb-1.5">Submitted Photograph (Before)</p>
-                <img
-                  src={complaint.photoUrl}
-                  alt="Submitted complaint"
-                  className="w-full h-44 object-cover rounded-xl border border-slate-200"
-                />
+                <p className="text-xs font-semibold text-slate-600 mb-1.5">
+                  Submitted Photograph
+                </p>
+                {complaint.photoUrl && !imgLoadError ? (
+                  <img
+                    src={complaint.photoUrl}
+                    alt="Submitted complaint"
+                    onError={() => setImgLoadError(true)}
+                    className="w-full h-44 object-cover rounded-xl border border-slate-200"
+                  />
+                ) : (
+                  <div className="w-full h-44 rounded-xl bg-slate-50 border border-slate-200 flex flex-col items-center justify-center p-4 text-center text-xs text-slate-500">
+                    <ImageOff className="w-6 h-6 text-slate-400 mb-1.5" />
+                    <span>
+                      {imgLoadError
+                        ? 'Photograph could not be loaded.'
+                        : 'No photograph was attached to this complaint.'}
+                    </span>
+                  </div>
+                )}
               </div>
               {complaint.resolutionPhotoUrl && (
                 <div>
-                  <p className="text-xs font-semibold text-emerald-700 mb-1.5">Resolution Evidence (After)</p>
+                  <p className="text-xs font-semibold text-emerald-700 mb-1.5">
+                    Resolution Evidence (After Cleaning)
+                  </p>
                   <img
                     src={complaint.resolutionPhotoUrl}
                     alt="Resolution proof"
@@ -818,50 +1219,41 @@ export function CitizenComplaintDetailPage() {
               )}
             </div>
           </div>
-        </div>
 
-        {/* Right Column: Status Timeline & Map */}
-        <div className="lg:col-span-5 space-y-6">
-          <div className="bg-white rounded-2xl border border-emerald-100 p-6 shadow-sm space-y-4">
-            <h3 className="text-sm font-extrabold text-slate-900">Status Lifecycle Timeline</h3>
-            <div className="space-y-4 relative before:absolute before:left-3 before:top-2 before:bottom-2 before:w-0.5 before:bg-emerald-200">
-              {complaint.timeline.map((step, idx) => (
-                <div key={idx} className="relative pl-8">
-                  <div className="w-6 h-6 rounded-full bg-forest-800 text-white flex items-center justify-center text-[10px] font-bold absolute left-0 top-0.5">
-                    {idx + 1}
-                  </div>
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-xs space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-forest-900">{step.status}</span>
-                      <span className="text-[10px] text-slate-400">
-                        {new Date(step.timestamp).toLocaleString()}
-                      </span>
-                    </div>
-                    <p className="text-slate-700">{step.note}</p>
-                    <p className="text-[11px] text-slate-500">By: {step.actor}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
+          {/* Reported Location Map */}
           <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm space-y-2">
             <h3 className="text-sm font-extrabold text-slate-900">Reported Location Map</h3>
             {hasValidCoords ? (
               <>
                 <p className="text-xs text-slate-500">
-                  {complaint.reported_latitude}° N, {complaint.reported_longitude}° E • {complaint.area}
+                  {complaint.reported_latitude}° N, {complaint.reported_longitude}° E •{' '}
+                  {complaint.area}
                 </p>
                 <VillageMap
-                  center={{ lat: complaint.reported_latitude, lng: complaint.reported_longitude }}
+                  center={{
+                    lat: complaint.reported_latitude,
+                    lng: complaint.reported_longitude,
+                  }}
                   height="220px"
                 />
               </>
             ) : (
               <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
-                Location coordinates were not provided. Reported textual address: <strong>{complaint.area}</strong>
+                Location coordinates were not provided. Reported textual address:{' '}
+                <strong>{complaint.area}</strong>
               </div>
             )}
+          </div>
+        </div>
+
+        {/* Right Column: Live Complaint Progress Timeline (Section 3) */}
+        <div id="progress" className="lg:col-span-5 space-y-6">
+          <div className="bg-white rounded-2xl border border-emerald-100 p-6 shadow-sm">
+            <ComplaintProgressTimeline
+              complaint={complaint}
+              historyEntries={historyEntries}
+              viewerRole="citizen"
+            />
           </div>
         </div>
       </div>
@@ -883,8 +1275,15 @@ export function GreenRewardsPage() {
   const totalEarned = currentUser?.totalPointsEarned || 0;
   const totalRedeemed = currentUser?.totalPointsRedeemed || 0;
 
-  const myRedemptions = redemptions.filter((r) => !currentUser || r.userId === currentUser.id);
-  const myTransactions = pointTransactions.filter((t) => !currentUser || t.userId === currentUser.id);
+  const myRedemptions = redemptions.filter(
+    (r) => !currentUser || r.userId === currentUser.id
+  );
+  const myTransactions = pointTransactions.filter(
+    (t) =>
+      !currentUser ||
+      t.userId === currentUser.id ||
+      t.user_id === currentUser.id
+  );
 
   const participationLevel =
     totalEarned >= 80
@@ -918,13 +1317,13 @@ export function GreenRewardsPage() {
         <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm">
           <p className="text-xs font-bold text-slate-500 uppercase">Participation Level</p>
           <p className="text-lg font-extrabold text-forest-900 mt-2">{participationLevel}</p>
-          <p className="text-[11px] text-emerald-700 mt-1">Anti-abuse verified</p>
+          <p className="text-[11px] text-emerald-700 mt-1">Anti-duplicate protected</p>
         </div>
       </div>
 
       <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-xs text-emerald-950 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <strong>Configurable Point Rules:</strong> Verified Complaint = <strong>+10 Pts</strong> • Confirmed Cleanliness Drive Attendance = <strong>+20 Pts</strong> • Household Segregation Activity = <strong>+5 Pts</strong> (Rejected complaints earn 0 pts).
+          <strong>Trusted Point Rules:</strong> Verified Complaint = <strong>+10 Pts</strong> • Confirmed Cleanliness Drive Attendance = <strong>+20 Pts</strong> • Household Segregation Activity = <strong>+5 Pts</strong> (Unapproved complaints earn 0 pts; duplicate awards are blocked).
         </div>
       </div>
 
@@ -951,7 +1350,9 @@ export function GreenRewardsPage() {
 
                 <div className="flex items-center justify-between pt-3 border-t border-slate-100">
                   <span className="text-[11px] font-semibold text-slate-500">
-                    {canRedeem ? 'Eligible to redeem' : `Need ${Math.max(0, r.pointsCost - currentPts)} more pts`}
+                    {canRedeem
+                      ? 'Eligible to redeem'
+                      : `Need ${Math.max(0, r.pointsCost - currentPts)} more pts`}
                   </span>
                   <button
                     type="button"
@@ -980,15 +1381,21 @@ export function GreenRewardsPage() {
           ) : (
             <div className="space-y-2.5">
               {myRedemptions.map((req) => (
-                <div key={req.id} className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-xs space-y-1">
+                <div
+                  key={req.id}
+                  className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-xs space-y-1"
+                >
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-slate-900">{req.rewardTitle}</span>
                     <StatusBadge status={req.status} />
                   </div>
                   <p className="text-slate-500">
-                    ID: {req.id} • Cost: {req.pointsCost} pts • {new Date(req.requestedAt).toLocaleDateString()}
+                    ID: {req.id} • Cost: {req.pointsCost} pts •{' '}
+                    {new Date(req.requestedAt).toLocaleDateString()}
                   </p>
-                  {req.authorityNote && <p className="text-emerald-800">Note: {req.authorityNote}</p>}
+                  {req.authorityNote && (
+                    <p className="text-emerald-800">Note: {req.authorityNote}</p>
+                  )}
                 </div>
               ))}
             </div>
@@ -996,29 +1403,41 @@ export function GreenRewardsPage() {
         </div>
 
         <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm space-y-3">
-          <h3 className="text-sm font-extrabold text-slate-900">Green Points Transaction Ledger</h3>
-          <div className="space-y-2.5">
-            {myTransactions.map((tx) => (
-              <div
-                key={tx.id}
-                className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-2 text-xs"
-              >
-                <div>
-                  <p className="font-bold text-slate-800">{tx.reason}</p>
-                  <p className="text-[11px] text-slate-400">
-                    Ref: {tx.referenceId} • {new Date(tx.createdAt).toLocaleDateString()}
-                  </p>
-                </div>
-                <span
-                  className={`font-extrabold px-2.5 py-1 rounded-lg ${
-                    tx.points > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
-                  }`}
+          <h3 className="text-sm font-extrabold text-slate-900">
+            Green Points Transaction History
+          </h3>
+          {myTransactions.length === 0 ? (
+            <p className="text-xs text-slate-500">No Green Points transactions recorded yet.</p>
+          ) : (
+            <div className="space-y-2.5">
+              {myTransactions.map((tx) => (
+                <div
+                  key={tx.id}
+                  className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-2 text-xs"
                 >
-                  {tx.points > 0 ? `+${tx.points}` : tx.points} pts
-                </span>
-              </div>
-            ))}
-          </div>
+                  <div>
+                    <p className="font-bold text-slate-800">{tx.reason}</p>
+                    <p className="text-[11px] text-slate-400">
+                      Ref: {tx.referenceId || tx.complaint_id || tx.id} •{' '}
+                      {new Date(tx.createdAt || tx.created_at).toLocaleString()}
+                      {tx.balance_after !== undefined
+                        ? ` • Balance After: ${tx.balance_after} pts`
+                        : ''}
+                    </p>
+                  </div>
+                  <span
+                    className={`font-extrabold px-2.5 py-1 rounded-lg shrink-0 ${
+                      tx.points > 0
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-amber-100 text-amber-900'
+                    }`}
+                  >
+                    {tx.points > 0 ? `+${tx.points}` : tx.points} pts
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </DashboardLayout>
@@ -1091,7 +1510,9 @@ export function CleanlinessActivitiesPage() {
     clearSelectedLocation,
   } = useApp();
 
-  const filteredActivities = activities.filter((a) => matchesLocationFilter(a, selectedLocation));
+  const filteredActivities = activities.filter((a) =>
+    matchesLocationFilter(a, selectedLocation)
+  );
 
   return (
     <DashboardLayout
@@ -1116,7 +1537,8 @@ export function CleanlinessActivitiesPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {filteredActivities.map((act) => {
             const isRegistered = currentUser && act.participants.includes(currentUser.id);
-            const isConfirmed = currentUser && act.confirmedAttendees.includes(currentUser.id);
+            const isConfirmed =
+              currentUser && act.confirmedAttendees.includes(currentUser.id);
             const isPast = act.status === 'Completed';
 
             return (
@@ -1128,7 +1550,9 @@ export function CleanlinessActivitiesPage() {
                   <div className="flex items-center justify-between gap-2">
                     <span
                       className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                        isPast ? 'bg-slate-100 text-slate-700' : 'bg-emerald-100 text-forest-900'
+                        isPast
+                          ? 'bg-slate-100 text-slate-700'
+                          : 'bg-emerald-100 text-forest-900'
                       }`}
                     >
                       {act.status}
@@ -1140,10 +1564,19 @@ export function CleanlinessActivitiesPage() {
                   <h3 className="text-base font-extrabold text-slate-900">{act.title}</h3>
                   <p className="text-xs text-slate-600">{act.description}</p>
                   <div className="text-xs text-slate-600 space-y-1 pt-1">
-                    <div>📅 <strong>Date &amp; Time:</strong> {act.date} • {act.time}</div>
-                    <div>📍 <strong>Meeting Point:</strong> {act.location}</div>
-                    <div>👥 <strong>Registered:</strong> {act.participants.length} / {act.participationLimit} citizens</div>
-                    <div>ℹ️ <strong>Instructions:</strong> {act.instructions}</div>
+                    <div>
+                      📅 <strong>Date &amp; Time:</strong> {act.date} • {act.time}
+                    </div>
+                    <div>
+                      📍 <strong>Meeting Point:</strong> {act.location}
+                    </div>
+                    <div>
+                      👥 <strong>Registered:</strong> {act.participants.length} /{' '}
+                      {act.participationLimit} citizens
+                    </div>
+                    <div>
+                      ℹ️ <strong>Instructions:</strong> {act.instructions}
+                    </div>
                   </div>
                 </div>
 
@@ -1157,7 +1590,9 @@ export function CleanlinessActivitiesPage() {
                     <span className="text-xs text-slate-400">Event concluded</span>
                   ) : isRegistered ? (
                     <div className="flex items-center justify-between w-full">
-                      <span className="text-xs font-semibold text-emerald-800">Registered (Awaiting Event Day)</span>
+                      <span className="text-xs font-semibold text-emerald-800">
+                        Registered (Awaiting Event Day)
+                      </span>
                       <button
                         type="button"
                         onClick={() => cancelActivityRegistration(act.id)}
@@ -1185,57 +1620,144 @@ export function CleanlinessActivitiesPage() {
   );
 }
 
-/* 17. CITIZEN NOTIFICATIONS PAGE */
+/* 17. CITIZEN NOTIFICATIONS PAGE (Section 1) */
 export function CitizenNotificationsPage() {
-  const { currentUser, notifications, markNotificationRead, markAllNotificationsRead } = useApp();
+  const {
+    myNotifications,
+    unreadNotificationCount,
+    markNotificationRead,
+    markAllNotificationsRead,
+    clearReadNotifications,
+  } = useApp();
+  const navigate = useNavigate();
 
-  const myNotifs = notifications.filter(
-    (n) => !currentUser || n.userId === currentUser.id || n.targetRole === 'citizen'
-  );
+  const handleOpen = (n) => {
+    const isRead = Boolean(n.is_read ?? n.read);
+    if (!isRead) markNotificationRead(n.id);
+    const complaintId =
+      n.related_complaint_id || n.relatedComplaintId || n.metadata?.complaint_id;
+    if (n.type === 'green_points' || n.type === 'reward') {
+      navigate('/citizen/rewards');
+    } else if (complaintId) {
+      navigate(`/citizen/complaints/${complaintId}`);
+    } else if (n.metadata?.link || n.link) {
+      navigate(n.metadata?.link || n.link);
+    }
+  };
 
   return (
     <DashboardLayout
       role="citizen"
-      title="My In-App Notifications"
-      subtitle="Updates on your sanitation complaints, Green Points, and collection reminders."
+      title="Notification Center"
+      subtitle="Persistent in-app updates for your complaint status lifecycle and Green Points credits."
       actions={
-        <button
-          type="button"
-          onClick={markAllNotificationsRead}
-          className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-100 text-forest-900"
-        >
-          Mark All as Read
-        </button>
+        <div className="flex items-center gap-2">
+          {unreadNotificationCount > 0 && (
+            <button
+              type="button"
+              onClick={markAllNotificationsRead}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-100 text-forest-900"
+            >
+              <CheckCheck className="w-3.5 h-3.5" />
+              Mark All as Read ({unreadNotificationCount})
+            </button>
+          )}
+          {myNotifications.some((n) => n.is_read || n.read) && (
+            <button
+              type="button"
+              onClick={clearReadNotifications}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-slate-100 text-slate-700 hover:bg-red-50 hover:text-red-700"
+            >
+              <Archive className="w-3.5 h-3.5" />
+              Clear Read
+            </button>
+          )}
+        </div>
       }
     >
-      <div className="space-y-3">
-        {myNotifs.map((n) => (
-          <div
-            key={n.id}
-            className={`p-4 rounded-2xl border transition flex items-start justify-between gap-4 ${
-              n.read ? 'bg-white border-slate-200/80' : 'bg-emerald-50/70 border-emerald-300 shadow-sm'
-            }`}
-          >
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                {!n.read && <span className="w-2 h-2 rounded-full bg-emerald-600" />}
-                <h3 className="text-sm font-bold text-slate-900">{n.title}</h3>
-              </div>
-              <p className="text-xs text-slate-600">{n.message}</p>
-              <p className="text-[11px] text-slate-400">{new Date(n.createdAt).toLocaleString()}</p>
-            </div>
-            {!n.read && (
-              <button
-                type="button"
-                onClick={() => markNotificationRead(n.id)}
-                className="text-xs font-bold text-forest-800 hover:underline shrink-0"
-              >
-                Mark Read
-              </button>
-            )}
+      {myNotifications.length === 0 ? (
+        <div className="bg-white rounded-3xl border border-emerald-100 p-10 text-center space-y-2 shadow-sm">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
+            <Bell className="w-6 h-6" />
           </div>
-        ))}
-      </div>
+          <p className="text-sm font-extrabold text-slate-900">
+            You&apos;re all caught up! New updates will appear here.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {myNotifications.map((n) => {
+            const isRead = Boolean(n.is_read ?? n.read);
+            const complaintId =
+              n.related_complaint_id || n.relatedComplaintId || n.metadata?.complaint_id;
+            const createdTime = n.created_at || n.createdAt;
+            const categoryLabel = getNotificationCategoryLabel(n.type);
+            const badgeCls = getNotificationCategoryBadgeClass(n.type);
+
+            return (
+              <div
+                key={n.id}
+                className={`p-4 rounded-2xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                  isRead
+                    ? 'bg-white border-slate-200/80'
+                    : 'bg-emerald-50/70 border-emerald-300 shadow-sm'
+                }`}
+              >
+                <div className="space-y-1.5 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {!isRead && <span className="w-2.5 h-2.5 rounded-full bg-emerald-600" />}
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${badgeCls}`}
+                    >
+                      {categoryLabel}
+                    </span>
+                    {complaintId && (
+                      <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-slate-100 text-forest-900">
+                        {complaintId}
+                      </span>
+                    )}
+                    <span className="text-[11px] font-semibold text-slate-400">
+                      {isRead ? 'Read' : 'Unread'}
+                    </span>
+                  </div>
+                  <h3 className="text-sm font-extrabold text-slate-900">{n.title}</h3>
+                  <p className="text-xs text-slate-600 leading-relaxed">{n.message}</p>
+                  <p className="text-[11px] text-slate-400">
+                    {createdTime ? new Date(createdTime).toLocaleString() : ''}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleOpen(n)}
+                    className="inline-flex items-center gap-1 px-3.5 py-2 rounded-xl text-xs font-bold bg-forest-800 hover:bg-forest-900 text-white"
+                  >
+                    <span>
+                      {n.type === 'green_points' || n.type === 'reward'
+                        ? 'Open Green Rewards'
+                        : complaintId
+                        ? `Open ${complaintId}`
+                        : 'Open Details'}
+                    </span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
+                  {!isRead && (
+                    <button
+                      type="button"
+                      onClick={() => markNotificationRead(n.id)}
+                      className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-100 text-forest-900 hover:bg-emerald-200"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      Mark Read
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </DashboardLayout>
   );
 }
@@ -1249,7 +1771,9 @@ export function CitizenProfilePage() {
   const [mobile, setMobile] = useState(currentUser?.mobile || '');
   const [householdArea, setHouseholdArea] = useState(currentUser?.householdArea || '');
   const [village, setVillage] = useState(currentUser?.village || '');
-  const [optInLeaderboard, setOptInLeaderboard] = useState(currentUser?.optInLeaderboard ?? true);
+  const [optInLeaderboard, setOptInLeaderboard] = useState(
+    currentUser?.optInLeaderboard ?? true
+  );
 
   const handleSave = (e) => {
     e.preventDefault();
@@ -1268,7 +1792,10 @@ export function CitizenProfilePage() {
       title="My Citizen Profile & Preferred Locality"
       subtitle="Manage your contact details, preferred village/city, and privacy settings."
     >
-      <form onSubmit={handleSave} className="bg-white rounded-2xl border border-emerald-100 p-6 shadow-sm space-y-4 max-w-2xl">
+      <form
+        onSubmit={handleSave}
+        className="bg-white rounded-2xl border border-emerald-100 p-6 shadow-sm space-y-4 max-w-2xl"
+      >
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">Full Name</label>
@@ -1280,7 +1807,9 @@ export function CitizenProfilePage() {
             />
           </div>
           <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Mobile Number</label>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Mobile Number
+            </label>
             <input
               type="tel"
               value={mobile}
@@ -1292,7 +1821,9 @@ export function CitizenProfilePage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Preferred Locality / Street Address</label>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Preferred Locality / Street Address
+            </label>
             <input
               type="text"
               value={householdArea}
@@ -1301,7 +1832,9 @@ export function CitizenProfilePage() {
             />
           </div>
           <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Village, Town, or City &amp; State</label>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Village, Town, or City &amp; State
+            </label>
             <input
               type="text"
               value={village}

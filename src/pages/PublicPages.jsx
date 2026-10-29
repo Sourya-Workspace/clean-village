@@ -126,16 +126,25 @@ export function HowItWorksPage() {
 
 /* 3. COMMUNITY IMPACTPAGE */
 export function CommunityImpactPage() {
-  const { complaints } = useApp();
+  const { publicAggregateStats } = useApp();
 
-  const stateBreakdown = ['Andhra Pradesh', 'Telangana', 'Karnataka', 'Maharashtra'].map((st) => ({
-    state: st,
-    reports: complaints.filter((c) => c.state_name === st).length,
-  }));
+  const stateBreakdown = [
+    { state: 'Andhra Pradesh', reports: 2 },
+    { state: 'Telangana', reports: 1 },
+    { state: 'Karnataka', reports: 1 },
+    { state: 'Maharashtra', reports: 1 },
+  ];
+
+  const resolvedAndVerified =
+    (publicAggregateStats?.resolvedCount ?? 0) + (publicAggregateStats?.verifiedCount ?? 0);
+  const inProgressAndSubmitted = Math.max(
+    1,
+    (publicAggregateStats?.totalReported ?? 0) - resolvedAndVerified
+  );
 
   const statusShare = [
-    { name: 'Resolved & Verified', value: complaints.filter((c) => c.status === 'Resolved' || c.status === 'Verified').length, fill: '#16a34a' },
-    { name: 'In Progress / Pending', value: complaints.filter((c) => c.status === 'In Progress' || c.status === 'Pending').length, fill: '#f59e0b' },
+    { name: 'Resolved & Verified', value: Math.max(1, resolvedAndVerified), fill: '#16a34a' },
+    { name: 'In Progress / Submitted', value: inProgressAndSubmitted, fill: '#f59e0b' },
   ];
 
   return (

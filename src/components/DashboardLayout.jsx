@@ -22,17 +22,29 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatLocationLabel } from '../services/geocoding';
+import NotificationBellPanel from './NotificationBellPanel';
+import { normalizeComplaintStatus } from './StatusBadge';
 
 export default function DashboardLayout({ children, role = 'citizen', title, subtitle, actions }) {
   const {
     currentUser,
     logout,
-    notifications,
+    complaints,
+    unreadNotificationCount,
     selectedLocation,
     setIsLocationModalOpen,
     clearSelectedLocation,
+    isSupabaseConfigured,
   } = useApp();
   const navigate = useNavigate();
+
+  const incomingPendingCount =
+    role === 'authority'
+      ? complaints.filter((c) => {
+          const st = normalizeComplaintStatus(c.status);
+          return st === 'submitted' || st === 'under_review' || st === 'reopened';
+        }).length
+      : 0;
 
   const citizenLinks = [
     { name: 'Citizen Dashboard', path: '/citizen/dashboard', icon: LayoutDashboard },
@@ -48,7 +60,7 @@ export default function DashboardLayout({ children, role = 'citizen', title, sub
 
   const authorityLinks = [
     { name: 'Authority Dashboard', path: '/authority/dashboard', icon: LayoutDashboard },
-    { name: 'Complaint Management', path: '/authority/complaints', icon: ClipboardList },
+    { name: 'Incoming Complaints', path: '/authority/complaints', icon: ClipboardList, badge: incomingPendingCount },
     { name: 'Cleaning Tasks', path: '/authority/tasks', icon: Wrench },
     { name: 'Collection Management', path: '/authority/schedules', icon: Truck },
     { name: 'Cleanliness Monitoring', path: '/authority/monitoring', icon: Activity },
@@ -60,12 +72,7 @@ export default function DashboardLayout({ children, role = 'citizen', title, sub
 
   const links = role === 'authority' ? authorityLinks : citizenLinks;
 
-  const unreadCount = notifications.filter(
-    (n) =>
-      !n.read &&
-      currentUser &&
-      (n.userId === currentUser.id || (currentUser.role === 'authority' && n.targetRole === 'authority'))
-  ).length;
+  const unreadCount = unreadNotificationCount;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -160,6 +167,11 @@ export default function DashboardLayout({ children, role = 'citizen', title, sub
                         {unreadCount}
                       </span>
                     )}
+                    {!isNotif && item.badge > 0 && (
+                      <span className="px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-emerald-500 text-white">
+                        {item.badge}
+                      </span>
+                    )}
                   </NavLink>
                 );
               })}
@@ -185,16 +197,21 @@ export default function DashboardLayout({ children, role = 'citizen', title, sub
           {title && (
             <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-forest-800">
                     {role === 'authority' ? 'Sanitation Authority Console' : 'Citizen Sanitation Portal'}
                   </span>
-                  <span className="text-[11px] text-slate-500">• CleanVillage India</span>
+                  <span className="text-[11px] text-slate-500">
+                    • {isSupabaseConfigured ? 'Connected to Supabase' : 'Local Demo Mode (Configure .env for Supabase)'}
+                  </span>
                 </div>
                 <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">{title}</h1>
                 {subtitle && <p className="text-xs sm:text-sm text-slate-600 mt-0.5">{subtitle}</p>}
               </div>
-              {actions && <div className="flex items-center gap-2 flex-wrap">{actions}</div>}
+              <div className="flex items-center gap-2 flex-wrap">
+                <NotificationBellPanel />
+                {actions}
+              </div>
             </div>
           )}
 

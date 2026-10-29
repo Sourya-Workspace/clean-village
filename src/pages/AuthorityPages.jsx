@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   Search,
   Download,
@@ -9,6 +9,17 @@ import {
   ExternalLink,
   ShieldCheck,
   AlertCircle,
+  ImageOff,
+  Eye,
+  Check,
+  CheckCheck,
+  Archive,
+  Bell,
+  Lock,
+  Wrench,
+  RotateCcw,
+  UserCheck,
+  X,
 } from 'lucide-react';
 import {
   BarChart,
@@ -27,7 +38,18 @@ import {
 } from 'recharts';
 import { useApp } from '../context/AppContext';
 import DashboardLayout from '../components/DashboardLayout';
-import { StatusBadge, PriorityBadge } from '../components/StatusBadge';
+import {
+  StatusBadge,
+  PriorityBadge,
+  normalizeComplaintStatus,
+  getStatusBadgeLabel,
+  getPermittedNextStatuses,
+} from '../components/StatusBadge';
+import ComplaintProgressTimeline from '../components/ComplaintProgressTimeline';
+import {
+  getNotificationCategoryLabel,
+  getNotificationCategoryBadgeClass,
+} from '../components/NotificationBellPanel';
 import VillageMap from '../components/VillageMap';
 import {
   COMPLAINT_CATEGORIES,
@@ -38,6 +60,269 @@ import { INDIA_STATES_AND_UTS, isValidCoordinatePair } from '../services/geocodi
 
 const CHART_COLORS = ['#15803d', '#0284c7', '#f59e0b', '#7c3aed', '#dc2626', '#0d9488'];
 
+/**
+ * Reusable Incoming Complaint Card for Administrator Dashboard & Incoming Complaints Feed (Section 5)
+ */
+function IncomingComplaintCard({
+  complaint,
+  onQuickStatusChange,
+  onRequestClarification,
+  onOpenPhoto,
+  isOverdue,
+}) {
+  const [imgError, setImgError] = useState(false);
+  const currentCode = normalizeComplaintStatus(complaint.status);
+  const permittedNext = getPermittedNextStatuses(currentCode, 'authority');
+  const hasValidCoords = isValidCoordinatePair(
+    complaint.reported_latitude,
+    complaint.reported_longitude
+  );
+  const externalMapUrl = hasValidCoords
+    ? `https://www.openstreetmap.org/?mlat=${complaint.reported_latitude}&mlon=${complaint.reported_longitude}#map=16/${complaint.reported_latitude}/${complaint.reported_longitude}`
+    : null;
+
+  return (
+    <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm hover:border-emerald-300 transition space-y-4">
+      <div className="flex flex-col lg:flex-row gap-5">
+        {/* Submitted Photograph or Clear No-Photo State */}
+        <div className="w-full lg:w-52 shrink-0 space-y-2">
+          {complaint.photoUrl && !imgError ? (
+            <div className="relative group">
+              <img
+                src={complaint.photoUrl}
+                alt={complaint.title}
+                onError={() => setImgError(true)}
+                className="w-full h-36 rounded-xl object-cover border border-slate-200"
+              />
+              <button
+                type="button"
+                onClick={() => onOpenPhoto(complaint)}
+                className="mt-1.5 w-full inline-flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-emerald-100 text-forest-900 transition"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                Open Photograph
+              </button>
+            </div>
+          ) : (
+            <div className="w-full h-36 rounded-xl bg-slate-50 border border-slate-200 flex flex-col items-center justify-center p-3 text-center text-xs text-slate-500">
+              <ImageOff className="w-5 h-5 text-slate-400 mb-1" />
+              <span>
+                {imgError
+                  ? 'Photograph could not be loaded.'
+                  : 'No photograph was attached to this complaint.'}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Complaint Metadata, Description, Location & Actions */}
+        <div className="flex-1 min-w-0 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-mono text-xs font-extrabold bg-emerald-100 text-forest-900 px-2.5 py-0.5 rounded">
+                {complaint.id}
+              </span>
+              <StatusBadge status={complaint.status} />
+              <PriorityBadge priority={complaint.urgency} />
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700">
+                Review: {complaint.location_review_status || 'Not Reviewed'}
+              </span>
+              {isOverdue && (
+                <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-extrabold">
+                  OVERDUE
+                </span>
+              )}
+            </div>
+            <span className="text-[11px] text-slate-400">
+              Submitted: {new Date(complaint.submittedAt).toLocaleString()}
+            </span>
+          </div>
+
+          <div>
+            <div className="text-[11px] font-bold uppercase text-emerald-700">
+              {complaint.category}
+            </div>
+            <h3 className="text-base font-extrabold text-slate-900 mt-0.5">{complaint.title}</h3>
+            <p className="text-xs text-slate-600 mt-1 leading-relaxed">{complaint.description}</p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-xs">
+            <div>
+              <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                Reported Address / Village
+              </span>
+              <span className="font-bold text-slate-800">{complaint.area}</span>
+            </div>
+            <div>
+              <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                Map Coordinates
+              </span>
+              {hasValidCoords ? (
+                <div className="flex items-center gap-2">
+                  <span className="font-mono font-bold text-emerald-800">
+                    {complaint.reported_latitude}°N, {complaint.reported_longitude}°E
+                  </span>
+                  {externalMapUrl && (
+                    <a
+                      href={externalMapUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-0.5 text-[11px] font-bold text-forest-800 underline"
+                    >
+                      Map
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <span className="text-slate-500">Manual entry (No GPS coords)</span>
+              )}
+            </div>
+            <div>
+              <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                Citizen Reference
+              </span>
+              <span className="font-semibold text-slate-800">
+                {complaint.citizen_name || complaint.userName}
+              </span>
+              {complaint.assignedTeam && (
+                <span className="block text-[11px] text-emerald-700 font-semibold">
+                  Team: {complaint.assignedTeam}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Role & State-Permitted Action Buttons */}
+          <div className="pt-1 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {permittedNext.includes('under_review') && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onQuickStatusChange(complaint.id, {
+                      newStatus: 'under_review',
+                      remarks: `Complaint ${complaint.id} is now under administrative verification.`,
+                    })
+                  }
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-sky-600 hover:bg-sky-700 text-white transition"
+                >
+                  Begin Verification
+                </button>
+              )}
+
+              {permittedNext.includes('verified') && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onQuickStatusChange(complaint.id, {
+                      newStatus: 'verified',
+                      remarks: 'Verified genuine sanitation issue (+10 Green Points credited).',
+                    })
+                  }
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white transition"
+                >
+                  Verify Complaint (+10 Pts)
+                </button>
+              )}
+
+              {permittedNext.includes('worker_assigned') && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onQuickStatusChange(complaint.id, {
+                      newStatus: 'worker_assigned',
+                      assignedTeam: complaint.assignedTeam || CLEANING_TEAMS[0],
+                      remarks: `Sanitation worker assigned (${
+                        complaint.assignedTeam || CLEANING_TEAMS[0]
+                      }).`,
+                    })
+                  }
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition"
+                >
+                  Assign Worker
+                </button>
+              )}
+
+              {permittedNext.includes('in_progress') && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onQuickStatusChange(complaint.id, {
+                      newStatus: 'in_progress',
+                      remarks: 'Cleaning work started at the reported location.',
+                    })
+                  }
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white transition"
+                >
+                  Start Cleaning
+                </button>
+              )}
+
+              {permittedNext.includes('resolved') && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onQuickStatusChange(complaint.id, {
+                      newStatus: 'resolved',
+                      remarks: 'Sanitation issue cleaned and verified as resolved.',
+                    })
+                  }
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition"
+                >
+                  Mark Resolved
+                </button>
+              )}
+
+              {permittedNext.includes('reopened') && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onQuickStatusChange(complaint.id, {
+                      newStatus: 'reopened',
+                      remarks: 'Complaint reopened by Administrator for further attention.',
+                    })
+                  }
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-orange-600 hover:bg-orange-700 text-white transition"
+                >
+                  Reopen
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => onRequestClarification(complaint.id)}
+                className="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-amber-100 hover:bg-amber-200 text-amber-950 transition"
+              >
+                Request Clarification
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {externalMapUrl && (
+                <a
+                  href={externalMapUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-forest-900 border border-emerald-200"
+                >
+                  View Reported Location
+                </a>
+              )}
+              <Link
+                to={`/authority/complaints/${complaint.id}`}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-forest-800 hover:bg-forest-900 text-white"
+              >
+                View Details &amp; Full Actions →
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* 19. AUTHORITY DASHBOARD */
 export function AuthorityDashboardPage() {
   const {
@@ -47,21 +332,32 @@ export function AuthorityDashboardPage() {
     setSlaTargetHours,
     isComplaintOverdue,
     updateComplaintStatus,
+    updateComplaintLocationReview,
   } = useApp();
 
-  // Admin sees all records by default unless explicitly filtering by a service area
   const [adminStateFilter, setAdminStateFilter] = useState('All');
+  const [lightboxComplaint, setLightboxComplaint] = useState(null);
 
   const visibleComplaints =
     adminStateFilter === 'All'
       ? complaints
-      : complaints.filter((c) => (c.state_name || '').toLowerCase() === adminStateFilter.toLowerCase());
+      : complaints.filter(
+          (c) => (c.state_name || '').toLowerCase() === adminStateFilter.toLowerCase()
+        );
 
   const totalComplaints = visibleComplaints.length;
-  const pendingVerification = visibleComplaints.filter((c) => c.status === 'Pending').length;
-  const verifiedCount = visibleComplaints.filter((c) => c.status === 'Verified').length;
-  const tasksInProgress = tasks.filter((t) => t.status === 'Assigned' || t.status === 'In Progress').length;
-  const resolvedCount = visibleComplaints.filter((c) => c.status === 'Resolved').length;
+  const awaitingVerification = visibleComplaints.filter((c) =>
+    ['submitted', 'under_review', 'reopened'].includes(normalizeComplaintStatus(c.status))
+  ).length;
+  const verifiedCount = visibleComplaints.filter(
+    (c) => normalizeComplaintStatus(c.status) === 'verified'
+  ).length;
+  const tasksInProgress = visibleComplaints.filter((c) =>
+    ['worker_assigned', 'in_progress'].includes(normalizeComplaintStatus(c.status))
+  ).length;
+  const resolvedCount = visibleComplaints.filter(
+    (c) => normalizeComplaintStatus(c.status) === 'resolved'
+  ).length;
   const overdueList = visibleComplaints.filter((c) => isComplaintOverdue(c));
 
   const categoryData = COMPLAINT_CATEGORIES.map((cat) => ({
@@ -70,16 +366,36 @@ export function AuthorityDashboardPage() {
     count: visibleComplaints.filter((c) => c.category === cat).length,
   })).filter((d) => d.count > 0);
 
-  const statusData = ['Pending', 'Verified', 'In Progress', 'Resolved', 'Rejected'].map((st) => ({
-    name: st,
-    value: visibleComplaints.filter((c) => c.status === st).length,
-  }));
+  const statusData = [
+    { key: 'submitted', label: 'Submitted' },
+    { key: 'under_review', label: 'Under Verification' },
+    { key: 'verified', label: 'Verified' },
+    { key: 'worker_assigned', label: 'Worker Assigned' },
+    { key: 'in_progress', label: 'Cleaning In Progress' },
+    { key: 'resolved', label: 'Resolved' },
+    { key: 'rejected', label: 'Not Approved' },
+  ]
+    .map((st) => ({
+      name: st.label,
+      value: visibleComplaints.filter(
+        (c) => normalizeComplaintStatus(c.status) === st.key
+      ).length,
+    }))
+    .filter((d) => d.value > 0);
+
+  const handleRequestClarification = (complaintId) => {
+    updateComplaintLocationReview(complaintId, {
+      reviewStatus: 'Needs Clarification',
+      reviewNote:
+        'Please provide a clearer landmark or additional location description for your complaint.',
+    });
+  };
 
   return (
     <DashboardLayout
       role="authority"
       title="Sanitation Authority Dashboard"
-      subtitle="Centralized administrative console for complaint verification, location review, cleaning tasks, schedules, and analytics."
+      subtitle="Centralized administrative console for Incoming Complaints, status lifecycle verification, worker assignment, and Green Points."
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-xl text-xs">
@@ -115,22 +431,22 @@ export function AuthorityDashboardPage() {
         </div>
       }
     >
-      {/* 6 Required Summary Cards */}
+      {/* 6 Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
         <div className="bg-white rounded-2xl border border-emerald-100 p-4 shadow-sm">
           <p className="text-[11px] font-bold text-slate-500 uppercase">Total Complaints</p>
           <p className="text-2xl font-extrabold text-slate-900 mt-1">{totalComplaints}</p>
         </div>
         <div className="bg-white rounded-2xl border border-amber-200 p-4 shadow-sm">
-          <p className="text-[11px] font-bold text-amber-800 uppercase">Pending Verification</p>
-          <p className="text-2xl font-extrabold text-amber-600 mt-1">{pendingVerification}</p>
+          <p className="text-[11px] font-bold text-amber-800 uppercase">Incoming / Review</p>
+          <p className="text-2xl font-extrabold text-amber-600 mt-1">{awaitingVerification}</p>
         </div>
         <div className="bg-white rounded-2xl border border-blue-200 p-4 shadow-sm">
           <p className="text-[11px] font-bold text-blue-800 uppercase">Verified</p>
           <p className="text-2xl font-extrabold text-blue-700 mt-1">{verifiedCount}</p>
         </div>
         <div className="bg-white rounded-2xl border border-purple-200 p-4 shadow-sm">
-          <p className="text-[11px] font-bold text-purple-800 uppercase">Tasks In Progress</p>
+          <p className="text-[11px] font-bold text-purple-800 uppercase">Worker / In Progress</p>
           <p className="text-2xl font-extrabold text-purple-700 mt-1">{tasksInProgress}</p>
         </div>
         <div className="bg-white rounded-2xl border border-emerald-200 p-4 shadow-sm">
@@ -138,7 +454,9 @@ export function AuthorityDashboardPage() {
           <p className="text-2xl font-extrabold text-emerald-700 mt-1">{resolvedCount}</p>
         </div>
         <div className="bg-red-50 rounded-2xl border border-red-200 p-4 shadow-sm">
-          <p className="text-[11px] font-bold text-red-800 uppercase">Overdue (&gt;{slaTargetHours}h)</p>
+          <p className="text-[11px] font-bold text-red-800 uppercase">
+            Overdue (&gt;{slaTargetHours}h)
+          </p>
           <p className="text-2xl font-extrabold text-red-700 mt-1">{overdueList.length}</p>
         </div>
       </div>
@@ -148,7 +466,10 @@ export function AuthorityDashboardPage() {
         <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-extrabold text-slate-900">Complaints by Category</h2>
-            <Link to="/authority/reports" className="text-xs font-bold text-forest-800 hover:underline">
+            <Link
+              to="/authority/reports"
+              className="text-xs font-bold text-forest-800 hover:underline"
+            >
               Full Analytics →
             </Link>
           </div>
@@ -166,11 +487,21 @@ export function AuthorityDashboardPage() {
         </div>
 
         <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm">
-          <h2 className="text-sm font-extrabold text-slate-900 mb-3">Complaint Status Distribution</h2>
+          <h2 className="text-sm font-extrabold text-slate-900 mb-3">
+            Complaint Lifecycle Distribution
+          </h2>
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie data={statusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={75} label>
+                <Pie
+                  data={statusData}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={75}
+                  label
+                >
                   {statusData.map((_, idx) => (
                     <Cell key={idx} fill={CHART_COLORS[idx % CHART_COLORS.length]} />
                   ))}
@@ -183,105 +514,80 @@ export function AuthorityDashboardPage() {
         </div>
       </div>
 
-      {/* Recent Complaints Table */}
-      <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm space-y-4">
-        <div className="flex items-center justify-between">
+      {/* INCOMING COMPLAINTS SECTION (Section 5) */}
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-base font-extrabold text-slate-900">Recent Community Complaints</h2>
+            <h2 className="text-lg font-extrabold text-slate-900">Incoming Complaints</h2>
             <p className="text-xs text-slate-500">
-              Inspect reported location evidence, record location review, and assign cleaning squads
+              All citizen-submitted sanitation complaints within your authorized administrator scope, including photographs, descriptions, and location evidence.
             </p>
           </div>
           <Link
             to="/authority/complaints"
-            className="px-3.5 py-2 rounded-xl text-xs font-bold bg-forest-800 text-white"
+            className="px-4 py-2 rounded-xl text-xs font-bold bg-forest-800 text-white"
           >
-            Open Full Complaint Manager
+            View All Incoming Complaints ({visibleComplaints.length}) →
           </Link>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-slate-200 text-slate-500 uppercase">
-                <th className="py-2.5 px-3">Complaint ID</th>
-                <th className="py-2.5 px-3">Category</th>
-                <th className="py-2.5 px-3">Reported Location</th>
-                <th className="py-2.5 px-3">Location Review</th>
-                <th className="py-2.5 px-3">Priority</th>
-                <th className="py-2.5 px-3">Status</th>
-                <th className="py-2.5 px-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {visibleComplaints.slice(0, 5).map((c) => {
-                const overdue = isComplaintOverdue(c);
-                return (
-                  <tr key={c.id} className="hover:bg-emerald-50/40">
-                    <td className="py-3 px-3 font-mono font-bold text-forest-900">
-                      {c.id}
-                      {overdue && (
-                        <span className="ml-1.5 px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-[10px] font-sans font-bold">
-                          OVERDUE
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-3 font-medium text-slate-800">{c.category}</td>
-                    <td className="py-3 px-3 text-slate-600">
-                      <div className="font-semibold text-slate-800">
-                        {c.village_name || c.city_name || c.area}
-                      </div>
-                      <div className="text-[11px] text-slate-500">
-                        {[c.district_name, c.state_name].filter(Boolean).join(', ')}
-                      </div>
-                    </td>
-                    <td className="py-3 px-3">
-                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700">
-                        {c.location_review_status || 'Not Reviewed'}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3">
-                      <PriorityBadge priority={c.urgency} />
-                    </td>
-                    <td className="py-3 px-3">
-                      <StatusBadge status={c.status} />
-                    </td>
-                    <td className="py-3 px-3 text-right space-x-1.5">
-                      {c.status === 'Pending' && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            updateComplaintStatus(c.id, {
-                              newStatus: 'Verified',
-                              remarks: 'Verified by Sanitation Officer.',
-                            })
-                          }
-                          className="px-2.5 py-1 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-700"
-                        >
-                          Verify
-                        </button>
-                      )}
-                      <Link
-                        to={`/authority/complaints/${c.id}`}
-                        className="inline-block px-2.5 py-1 rounded-lg bg-emerald-100 text-forest-900 font-bold hover:bg-emerald-200"
-                      >
-                        Inspect Location &amp; Manage →
-                      </Link>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="space-y-4">
+          {visibleComplaints.slice(0, 4).map((c) => (
+            <IncomingComplaintCard
+              key={c.id}
+              complaint={c}
+              isOverdue={isComplaintOverdue(c)}
+              onQuickStatusChange={updateComplaintStatus}
+              onRequestClarification={handleRequestClarification}
+              onOpenPhoto={(comp) => setLightboxComplaint(comp)}
+            />
+          ))}
         </div>
       </div>
+
+      {/* Photograph Lightbox Modal */}
+      {lightboxComplaint && (
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-5 space-y-3 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="font-mono text-xs font-bold text-forest-900">
+                  {lightboxComplaint.id}
+                </span>
+                <h3 className="text-sm font-extrabold text-slate-900">
+                  {lightboxComplaint.title}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLightboxComplaint(null)}
+                className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <img
+              src={lightboxComplaint.photoUrl}
+              alt={lightboxComplaint.title}
+              className="w-full max-h-[420px] object-contain rounded-2xl bg-slate-900"
+            />
+            <p className="text-xs text-slate-600">{lightboxComplaint.description}</p>
+          </div>
+        </div>
+      )}
     </DashboardLayout>
   );
 }
 
-/* 20. COMPLAINT MANAGEMENT PAGE (Supports Filtering by State, District, City/Village, Locality, Status, Category) */
+/* 20. INCOMING COMPLAINTS MANAGEMENT PAGE (Section 5) */
 export function ComplaintManagementPage() {
-  const { complaints, isComplaintOverdue, slaTargetHours } = useApp();
+  const {
+    complaints,
+    isComplaintOverdue,
+    slaTargetHours,
+    updateComplaintStatus,
+    updateComplaintLocationReview,
+  } = useApp();
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
@@ -289,6 +595,7 @@ export function ComplaintManagementPage() {
   const [onlyOverdue, setOnlyOverdue] = useState(false);
   const [sortBy, setSortBy] = useState('newest');
   const [page, setPage] = useState(1);
+  const [lightboxComplaint, setLightboxComplaint] = useState(null);
   const pageSize = 6;
 
   const filtered = complaints
@@ -300,12 +607,15 @@ export function ComplaintManagementPage() {
       const matchesSearch =
         c.id.toLowerCase().includes(search.toLowerCase()) ||
         c.title.toLowerCase().includes(search.toLowerCase()) ||
+        c.description.toLowerCase().includes(search.toLowerCase()) ||
         combinedLocation.includes(search.toLowerCase()) ||
-        c.userName.toLowerCase().includes(search.toLowerCase());
+        (c.userName || '').toLowerCase().includes(search.toLowerCase());
 
       const matchesState =
-        stateFilter === 'All' || (c.state_name || '').toLowerCase() === stateFilter.toLowerCase();
-      const matchesStatus = statusFilter === 'All' || c.status === statusFilter;
+        stateFilter === 'All' ||
+        (c.state_name || '').toLowerCase() === stateFilter.toLowerCase();
+      const matchesStatus =
+        statusFilter === 'All' || normalizeComplaintStatus(c.status) === statusFilter;
       const matchesCategory = categoryFilter === 'All' || c.category === categoryFilter;
       const matchesOverdue = !onlyOverdue || isComplaintOverdue(c);
 
@@ -320,11 +630,19 @@ export function ComplaintManagementPage() {
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
 
+  const handleRequestClarification = (complaintId) => {
+    updateComplaintLocationReview(complaintId, {
+      reviewStatus: 'Needs Clarification',
+      reviewNote:
+        'Please provide a clearer landmark or additional location description for your complaint.',
+    });
+  };
+
   return (
     <DashboardLayout
       role="authority"
-      title="Complaint Management (India-Wide)"
-      subtitle="Filter by State, District, Village/City, or Locality; inspect location evidence; and manage resolution."
+      title="Incoming Complaints (Administrator Intake & Verification)"
+      subtitle="View all citizen complaints across India with submitted photographs, descriptions, coordinates, and lifecycle actions."
     >
       {/* Filters Bar */}
       <div className="bg-white rounded-2xl border border-emerald-100 p-4 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
@@ -337,7 +655,7 @@ export function ComplaintManagementPage() {
               setSearch(e.target.value);
               setPage(1);
             }}
-            placeholder="Search ID, district, village, city, or street..."
+            placeholder="Search ID, description, citizen, village, city, or street..."
             className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-xs"
           />
         </div>
@@ -348,7 +666,7 @@ export function ComplaintManagementPage() {
             setStateFilter(e.target.value);
             setPage(1);
           }}
-          className="px-3 py-2 rounded-xl border border-slate-200 text-xs"
+          className="px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white"
         >
           <option value="All">All States / UTs</option>
           {INDIA_STATES_AND_UTS.map((st) => (
@@ -364,14 +682,17 @@ export function ComplaintManagementPage() {
             setStatusFilter(e.target.value);
             setPage(1);
           }}
-          className="px-3 py-2 rounded-xl border border-slate-200 text-xs"
+          className="px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white"
         >
           <option value="All">All Statuses</option>
-          <option value="Pending">Pending Verification</option>
-          <option value="Verified">Verified</option>
-          <option value="In Progress">In Progress</option>
-          <option value="Resolved">Resolved</option>
-          <option value="Rejected">Rejected</option>
+          <option value="submitted">Submitted</option>
+          <option value="under_review">Under Verification</option>
+          <option value="verified">Verified</option>
+          <option value="worker_assigned">Worker Assigned</option>
+          <option value="in_progress">Cleaning In Progress</option>
+          <option value="resolved">Resolved</option>
+          <option value="reopened">Reopened</option>
+          <option value="rejected">Not Approved</option>
         </select>
 
         <select
@@ -380,7 +701,7 @@ export function ComplaintManagementPage() {
             setCategoryFilter(e.target.value);
             setPage(1);
           }}
-          className="px-3 py-2 rounded-xl border border-slate-200 text-xs"
+          className="px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white"
         >
           <option value="All">All Categories</option>
           {COMPLAINT_CATEGORIES.map((cat) => (
@@ -406,7 +727,7 @@ export function ComplaintManagementPage() {
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value)}
-            className="px-2 py-1.5 rounded-lg border border-slate-200 text-xs"
+            className="px-2 py-1.5 rounded-lg border border-slate-200 text-xs bg-white"
           >
             <option value="newest">Newest</option>
             <option value="oldest">Oldest</option>
@@ -414,77 +735,29 @@ export function ComplaintManagementPage() {
         </div>
       </div>
 
-      {/* Table */}
-      <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm space-y-4">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-slate-200 text-slate-500 uppercase">
-                <th className="py-2.5 px-3">ID</th>
-                <th className="py-2.5 px-3">Title &amp; Category</th>
-                <th className="py-2.5 px-3">Reported Location (State / District / Locality)</th>
-                <th className="py-2.5 px-3">Location Review</th>
-                <th className="py-2.5 px-3">Priority</th>
-                <th className="py-2.5 px-3">Status</th>
-                <th className="py-2.5 px-3 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {paginated.map((c) => {
-                const overdue = isComplaintOverdue(c);
-                return (
-                  <tr key={c.id} className="hover:bg-emerald-50/40">
-                    <td className="py-3 px-3 font-mono font-bold text-forest-900">
-                      <div>{c.id}</div>
-                      {overdue && (
-                        <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-[10px] font-sans font-bold">
-                          OVERDUE
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-3">
-                      <p className="font-bold text-slate-900">{c.title}</p>
-                      <p className="text-slate-500">{c.category}</p>
-                    </td>
-                    <td className="py-3 px-3">
-                      <p className="font-bold text-slate-800">{c.area}</p>
-                      <p className="text-slate-500">
-                        {[c.village_name || c.city_name, c.district_name, c.state_name]
-                          .filter(Boolean)
-                          .join(' • ')}
-                      </p>
-                      <p className="text-[11px] text-slate-400">Citizen: {c.userName}</p>
-                    </td>
-                    <td className="py-3 px-3">
-                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700">
-                        {c.location_review_status || 'Not Reviewed'}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3">
-                      <PriorityBadge priority={c.urgency} />
-                    </td>
-                    <td className="py-3 px-3">
-                      <StatusBadge status={c.status} />
-                    </td>
-                    <td className="py-3 px-3 text-right">
-                      <Link
-                        to={`/authority/complaints/${c.id}`}
-                        className="inline-block px-3 py-1.5 rounded-xl bg-forest-800 text-white font-bold hover:bg-forest-900"
-                      >
-                        Inspect &amp; Verify
-                      </Link>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+      {/* Incoming Complaint Cards */}
+      <div className="space-y-4">
+        {paginated.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-emerald-100 p-8 text-center text-xs text-slate-600">
+            No incoming complaints match the selected filters.
+          </div>
+        ) : (
+          paginated.map((c) => (
+            <IncomingComplaintCard
+              key={c.id}
+              complaint={c}
+              isOverdue={isComplaintOverdue(c)}
+              onQuickStatusChange={updateComplaintStatus}
+              onRequestClarification={handleRequestClarification}
+              onOpenPhoto={(comp) => setLightboxComplaint(comp)}
+            />
+          ))
+        )}
 
         {/* Pagination */}
-        <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-xs text-slate-600">
+        <div className="bg-white rounded-2xl border border-emerald-100 px-5 py-3 flex items-center justify-between text-xs text-slate-600">
           <span>
-            Showing {paginated.length} of {filtered.length} matching complaints
+            Showing {paginated.length} of {filtered.length} incoming complaints
           </span>
           <div className="flex items-center gap-2">
             <button
@@ -509,57 +782,109 @@ export function ComplaintManagementPage() {
           </div>
         </div>
       </div>
+
+      {lightboxComplaint && (
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-5 space-y-3 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="font-mono text-xs font-bold text-forest-900">
+                  {lightboxComplaint.id}
+                </span>
+                <h3 className="text-sm font-extrabold text-slate-900">
+                  {lightboxComplaint.title}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLightboxComplaint(null)}
+                className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <img
+              src={lightboxComplaint.photoUrl}
+              alt={lightboxComplaint.title}
+              className="w-full max-h-[420px] object-contain rounded-2xl bg-slate-900"
+            />
+            <p className="text-xs text-slate-600">{lightboxComplaint.description}</p>
+          </div>
+        </div>
+      )}
     </DashboardLayout>
   );
 }
 
-/* 21. COMPLAINT DETAILS, REPORTED LOCATION & EVIDENCE, AND LOCATION REVIEW PAGE */
+/* 21. COMPLAINT DETAILS, REPORTED LOCATION & EVIDENCE, AND LIFECYCLE MANAGEMENT PAGE */
 export function AuthorityComplaintDetailPage() {
   const { id } = useParams();
   const {
-    complaints,
+    getAuthorizedComplaintById,
+    getComplaintHistoryForViewer,
     updateComplaintStatus,
     updateComplaintLocationReview,
     assignCleaningTask,
   } = useApp();
 
-  const complaint = complaints.find((c) => c.id === id) || complaints[0];
+  const { complaint } = getAuthorizedComplaintById(id);
+  const historyEntries = complaint ? getComplaintHistoryForViewer(complaint.id) : [];
 
   const [remarks, setRemarks] = useState(complaint?.authorityRemarks || '');
+  const [internalNote, setInternalNote] = useState('');
   const [rejectionReason, setRejectionReason] = useState(complaint?.rejectionReason || '');
-  const [selectedTeam, setSelectedTeam] = useState(complaint?.assignedTeam || CLEANING_TEAMS[0]);
+  const [selectedTeam, setSelectedTeam] = useState(
+    complaint?.assignedTeam || CLEANING_TEAMS[0]
+  );
   const [taskDesc, setTaskDesc] = useState(
-    `Clean & sanitize reported ${complaint?.category} at ${complaint?.area}`
+    `Clean & sanitize reported ${complaint?.category || 'issue'} at ${
+      complaint?.area || 'site'
+    }`
   );
   const [reviewStatus, setReviewStatus] = useState(
     complaint?.location_review_status || 'Not Reviewed'
   );
   const [reviewNote, setReviewNote] = useState(complaint?.location_review_note || '');
   const [actionError, setActionError] = useState('');
+  const [imgLoadError, setImgLoadError] = useState(false);
 
   if (!complaint) {
     return (
       <DashboardLayout role="authority" title="Complaint Not Found">
-        <p className="text-xs">No complaint found with ID {id}.</p>
+        <div className="bg-white rounded-2xl border border-emerald-100 p-6 space-y-3">
+          <p className="text-xs">No complaint found with ID {id}.</p>
+          <Link
+            to="/authority/complaints"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-forest-800 text-white"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to Incoming Complaints
+          </Link>
+        </div>
       </DashboardLayout>
     );
   }
 
+  const currentCode = normalizeComplaintStatus(complaint.status);
+  const permittedNext = getPermittedNextStatuses(currentCode, 'authority');
   const hasValidCoords = isValidCoordinatePair(
     complaint.reported_latitude,
     complaint.reported_longitude
   );
 
-  const handleStatusChange = (newStatus) => {
+  const handleStatusChange = async (newStatus) => {
     setActionError('');
-    const res = updateComplaintStatus(complaint.id, {
+    const res = await updateComplaintStatus(complaint.id, {
       newStatus,
       remarks,
+      internalNote,
       rejectionReason,
       assignedTeam: selectedTeam,
     });
     if (!res.success) {
       setActionError(res.error);
+    } else {
+      setInternalNote('');
     }
   };
 
@@ -575,10 +900,10 @@ export function AuthorityComplaintDetailPage() {
     }
   };
 
-  const handleCreateTask = (e) => {
+  const handleCreateTask = async (e) => {
     e.preventDefault();
     setActionError('');
-    const res = assignCleaningTask({
+    const res = await assignCleaningTask({
       complaintId: complaint.id,
       assignedTeam: selectedTeam,
       description: taskDesc,
@@ -597,15 +922,17 @@ export function AuthorityComplaintDetailPage() {
   return (
     <DashboardLayout
       role="authority"
-      title={`Inspect & Verify Complaint: ${complaint.id}`}
-      subtitle={`Submitted by ${complaint.userName} • ${complaint.area}`}
+      title={`Inspect & Manage Complaint: ${complaint.id}`}
+      subtitle={`Submitted by ${complaint.citizen_name || complaint.userName} • ${
+        complaint.area
+      }`}
       actions={
         <Link
           to="/authority/complaints"
           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-slate-100 text-slate-700"
         >
           <ArrowLeft className="w-4 h-4" />
-          Back to List
+          Back to Incoming Complaints
         </Link>
       }
     >
@@ -615,7 +942,7 @@ export function AuthorityComplaintDetailPage() {
         </div>
       )}
 
-      {/* DEDICATED SECTION: REPORTED LOCATION & EVIDENCE (Requirement 6) */}
+      {/* DEDICATED SECTION: REPORTED LOCATION & EVIDENCE */}
       <div className="bg-white rounded-2xl border border-emerald-200 p-6 shadow-sm space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
           <div>
@@ -633,52 +960,71 @@ export function AuthorityComplaintDetailPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left: Structured Location & Metadata */}
+          {/* Left: Structured Location, Description & Photographs */}
           <div className="lg:col-span-6 space-y-4">
             <div>
               <h3 className="text-base font-bold text-slate-900">{complaint.title}</h3>
-              <p className="text-xs text-slate-600 mt-1 leading-relaxed">{complaint.description}</p>
+              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                {complaint.description}
+              </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-200/80 text-xs">
               <div>
-                <span className="text-slate-400 block text-[10px] font-bold uppercase">Complaint ID</span>
+                <span className="text-slate-400 block text-[10px] font-bold uppercase">
+                  Complaint ID
+                </span>
                 <span className="font-mono font-bold text-forest-900">{complaint.id}</span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] font-bold uppercase">Category</span>
+                <span className="text-slate-400 block text-[10px] font-bold uppercase">
+                  Category
+                </span>
                 <span className="font-bold text-slate-800">{complaint.category}</span>
               </div>
               <div className="sm:col-span-2">
-                <span className="text-slate-400 block text-[10px] font-bold uppercase">Reported Address</span>
+                <span className="text-slate-400 block text-[10px] font-bold uppercase">
+                  Reported Address
+                </span>
                 <span className="font-bold text-slate-900">{complaint.area}</span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] font-bold uppercase">State &amp; District</span>
+                <span className="text-slate-400 block text-[10px] font-bold uppercase">
+                  State &amp; District
+                </span>
                 <span className="font-semibold text-slate-800">
                   {complaint.state_name || '—'} / {complaint.district_name || '—'}
                 </span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] font-bold uppercase">Village, Town, or City</span>
+                <span className="text-slate-400 block text-[10px] font-bold uppercase">
+                  Village, Town, or City
+                </span>
                 <span className="font-semibold text-slate-800">
                   {complaint.village_name || complaint.city_name || '—'}
                 </span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] font-bold uppercase">Locality / Landmark</span>
+                <span className="text-slate-400 block text-[10px] font-bold uppercase">
+                  Locality / Landmark
+                </span>
                 <span className="font-semibold text-slate-800">
-                  {complaint.locality || '—'} {complaint.landmark ? `(${complaint.landmark})` : ''}
+                  {complaint.locality || '—'}{' '}
+                  {complaint.landmark ? `(${complaint.landmark})` : ''}
                 </span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] font-bold uppercase">Submission Timestamp</span>
+                <span className="text-slate-400 block text-[10px] font-bold uppercase">
+                  Submission Timestamp
+                </span>
                 <span className="font-semibold text-slate-800">
                   {new Date(complaint.submittedAt).toLocaleString()}
                 </span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] font-bold uppercase">Latitude &amp; Longitude</span>
+                <span className="text-slate-400 block text-[10px] font-bold uppercase">
+                  Latitude &amp; Longitude
+                </span>
                 <span className="font-mono font-bold text-emerald-800">
                   {hasValidCoords
                     ? `${complaint.reported_latitude}° N, ${complaint.reported_longitude}° E`
@@ -686,38 +1032,52 @@ export function AuthorityComplaintDetailPage() {
                 </span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] font-bold uppercase">Location Capture Method</span>
-                <span className="font-semibold text-slate-800">{complaint.location_capture_method}</span>
+                <span className="text-slate-400 block text-[10px] font-bold uppercase">
+                  Location Capture Method
+                </span>
+                <span className="font-semibold text-slate-800">
+                  {complaint.location_capture_method}
+                </span>
               </div>
               <div className="sm:col-span-2">
                 <span className="text-slate-400 block text-[10px] font-bold uppercase">
-                  Location Confirmation Status
+                  Citizen Reference
                 </span>
-                <span className="font-bold text-forest-900">{complaint.location_confirmation_status}</span>
+                <span className="font-bold text-forest-900">
+                  {complaint.citizen_name || complaint.userName}
+                </span>
               </div>
-              {complaint.citizenRegisteredLocality && (
-                <div className="sm:col-span-2 pt-2 border-t border-slate-200">
-                  <span className="text-slate-400 block text-[10px] font-bold uppercase">
-                    Citizen's Registered Home Locality (Separate from Reported Issue)
-                  </span>
-                  <span className="text-slate-700">{complaint.citizenRegisteredLocality}</span>
-                </div>
-              )}
             </div>
 
             {/* Photographs */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <p className="text-xs font-bold text-slate-700 mb-1">Complaint Photograph (Submitted)</p>
-                <img
-                  src={complaint.photoUrl}
-                  alt="Submitted complaint evidence"
-                  className="w-full h-44 object-cover rounded-xl border border-slate-200"
-                />
+                <p className="text-xs font-bold text-slate-700 mb-1">
+                  Submitted Complaint Photograph
+                </p>
+                {complaint.photoUrl && !imgLoadError ? (
+                  <img
+                    src={complaint.photoUrl}
+                    alt="Submitted complaint evidence"
+                    onError={() => setImgLoadError(true)}
+                    className="w-full h-44 object-cover rounded-xl border border-slate-200"
+                  />
+                ) : (
+                  <div className="w-full h-44 rounded-xl bg-slate-50 border border-slate-200 flex flex-col items-center justify-center p-4 text-center text-xs text-slate-500">
+                    <ImageOff className="w-6 h-6 text-slate-400 mb-1" />
+                    <span>
+                      {imgLoadError
+                        ? 'Photograph could not be loaded.'
+                        : 'No photograph was attached to this complaint.'}
+                    </span>
+                  </div>
+                )}
               </div>
               {complaint.resolutionPhotoUrl && (
                 <div>
-                  <p className="text-xs font-bold text-emerald-700 mb-1">Resolution Photograph (After)</p>
+                  <p className="text-xs font-bold text-emerald-700 mb-1">
+                    Resolution Photograph (After)
+                  </p>
                   <img
                     src={complaint.resolutionPhotoUrl}
                     alt="Resolution evidence"
@@ -728,7 +1088,7 @@ export function AuthorityComplaintDetailPage() {
             </div>
           </div>
 
-          {/* Right: Interactive Map or Missing Coordinates Notice */}
+          {/* Right: Interactive Map & Administrative Location Review */}
           <div className="lg:col-span-6 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-extrabold text-slate-900">
@@ -753,7 +1113,7 @@ export function AuthorityComplaintDetailPage() {
                   lat: Number(complaint.reported_latitude),
                   lng: Number(complaint.reported_longitude),
                 }}
-                height="290px"
+                height="280px"
                 showSingleMarker={true}
               />
             ) : (
@@ -763,15 +1123,12 @@ export function AuthorityComplaintDetailPage() {
                   <span>No Map Coordinates Provided</span>
                 </div>
                 <p className="leading-relaxed">
-                  Location coordinates were not provided. Please review the citizen's manually entered address.
-                </p>
-                <p className="text-[11px] text-amber-800">
-                   Manual address submitted: <strong>{complaint.area}</strong> (CleanVillage never places a fake fallback marker when coordinates are absent.)
+                  Location coordinates were not provided. Please review the citizen&apos;s manually entered address: <strong>{complaint.area}</strong>.
                 </p>
               </div>
             )}
 
-            {/* Requirement 7: Administrative Location Review Section (No Fake AI Claims) */}
+            {/* Administrative Location Review */}
             <form
               onSubmit={handleSaveLocationReview}
               className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200 space-y-3"
@@ -779,16 +1136,12 @@ export function AuthorityComplaintDetailPage() {
               <div className="flex items-center justify-between">
                 <h4 className="text-xs font-extrabold text-forest-950 flex items-center gap-1.5">
                   <ShieldCheck className="w-4 h-4 text-emerald-700" />
-                  Administrative Location Review (Human Assessment)
+                  Administrative Location Review
                 </h4>
                 <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-white border border-emerald-300 text-forest-900">
                   {complaint.location_review_status || 'Not Reviewed'}
                 </span>
               </div>
-
-              <p className="text-[11px] text-slate-600 leading-relaxed">
-                Compare the submitted photograph, textual address, and map position. This records an administrative human review outcome—presence or absence of GPS coordinates alone does not prove authenticity or invalidate a manual report.
-              </p>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -810,13 +1163,13 @@ export function AuthorityComplaintDetailPage() {
 
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                    Internal / Review Note
+                    Review Note
                   </label>
                   <input
                     type="text"
                     value={reviewNote}
                     onChange={(e) => setReviewNote(e.target.value)}
-                    placeholder="e.g., Landmark matches photo / Requesting street clarification"
+                    placeholder="e.g., Landmark verified / Requesting street clarification"
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white"
                   />
                 </div>
@@ -825,17 +1178,19 @@ export function AuthorityComplaintDetailPage() {
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                 {complaint.location_reviewed_by ? (
                   <span className="text-[11px] text-slate-500">
-                    Last reviewed by <strong>{complaint.location_reviewed_by}</strong> on{' '}
+                    Reviewed by <strong>{complaint.location_reviewed_by}</strong> on{' '}
                     {new Date(complaint.location_reviewed_at).toLocaleString()}
                   </span>
                 ) : (
-                  <span className="text-[11px] text-slate-500">Not yet reviewed by an administrator</span>
+                  <span className="text-[11px] text-slate-500">
+                    Not yet reviewed by an administrator
+                  </span>
                 )}
                 <button
                   type="submit"
                   className="px-4 py-1.5 rounded-xl text-xs font-bold bg-forest-800 hover:bg-forest-900 text-white"
                 >
-                  Record Location Review
+                  Save Location Review
                 </button>
               </div>
             </form>
@@ -843,76 +1198,131 @@ export function AuthorityComplaintDetailPage() {
         </div>
       </div>
 
-      {/* Bottom Row: Complaint Verification Lifecycle & Task Assignment */}
+      {/* Bottom Row: Lifecycle Status Transition Controls + History & Task Assignment */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-7 bg-white rounded-2xl border border-emerald-100 p-6 shadow-sm space-y-4">
-          <h3 className="text-base font-extrabold text-slate-900">
-            Verify Complaint or Update Lifecycle Status
-          </h3>
-          <p className="text-xs text-slate-500">
-            Verifying a complaint awards +10 Green Points once, and never marks it Resolved automatically until cleaning is completed.
-          </p>
+        <div className="lg:col-span-6 space-y-6">
+          <div className="bg-white rounded-2xl border border-emerald-100 p-6 shadow-sm space-y-4">
+            <h3 className="text-base font-extrabold text-slate-900">
+              Update Complaint Lifecycle Status
+            </h3>
+            <p className="text-xs text-slate-500">
+              Current Status: <strong>{getStatusBadgeLabel(complaint.status)}</strong>. Every status transition records an entry in <code>complaint_history</code> and sends an in-app notification to the citizen.
+            </p>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              Public / Authority Remarks (Required for Resolution)
-            </label>
-            <textarea
-              rows={2}
-              value={remarks}
-              onChange={(e) => setRemarks(e.target.value)}
-              placeholder="Enter field inspection notes or cleaning completion summary..."
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
-            />
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Public Update Message (Visible to Citizen in Progress Timeline)
+              </label>
+              <textarea
+                rows={2}
+                value={remarks}
+                onChange={(e) => setRemarks(e.target.value)}
+                placeholder="Enter public progress update or resolution summary for the citizen..."
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+              />
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200 space-y-1.5">
+              <label className="flex items-center gap-1.5 text-xs font-extrabold text-amber-950">
+                <Lock className="w-3.5 h-3.5 text-amber-700" />
+                Internal Administrative Note (Private — Never Visible to Citizens)
+              </label>
+              <input
+                type="text"
+                value={internalNote}
+                onChange={(e) => setInternalNote(e.target.value)}
+                placeholder="Optional internal audit note for sanitation staff only..."
+                className="w-full px-3 py-2 rounded-xl border border-amber-300 text-xs bg-white"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Review Explanation (Mandatory if Marking &quot;Not Approved&quot;)
+              </label>
+              <input
+                type="text"
+                value={rejectionReason}
+                onChange={(e) => setRejectionReason(e.target.value)}
+                placeholder="e.g., Duplicate report / Unrelated image / Already serviced"
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-2 pt-2">
+              {permittedNext.includes('under_review') && (
+                <button
+                  type="button"
+                  onClick={() => handleStatusChange('under_review')}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-sky-600 hover:bg-sky-700 text-white"
+                >
+                  Begin Verification (Under Verification)
+                </button>
+              )}
+
+              {permittedNext.includes('verified') && (
+                <button
+                  type="button"
+                  onClick={() => handleStatusChange('verified')}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  Verify Complaint (+10 Green Points)
+                </button>
+              )}
+
+              {permittedNext.includes('worker_assigned') && (
+                <button
+                  type="button"
+                  onClick={() => handleStatusChange('worker_assigned')}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white"
+                >
+                  Assign Sanitation Worker
+                </button>
+              )}
+
+              {permittedNext.includes('in_progress') && (
+                <button
+                  type="button"
+                  onClick={() => handleStatusChange('in_progress')}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white"
+                >
+                  Start Cleaning (In Progress)
+                </button>
+              )}
+
+              {permittedNext.includes('resolved') && (
+                <button
+                  type="button"
+                  onClick={() => handleStatusChange('resolved')}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white"
+                >
+                  Mark Resolved (+10 Green Points)
+                </button>
+              )}
+
+              {permittedNext.includes('rejected') && (
+                <button
+                  type="button"
+                  onClick={() => handleStatusChange('rejected')}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white"
+                >
+                  Reject with Explanation (Not Approved)
+                </button>
+              )}
+
+              {permittedNext.includes('reopened') && (
+                <button
+                  type="button"
+                  onClick={() => handleStatusChange('reopened')}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-orange-600 hover:bg-orange-700 text-white"
+                >
+                  Reopen Complaint
+                </button>
+              )}
+            </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              Rejection Reason (Mandatory if Rejecting)
-            </label>
-            <input
-              type="text"
-              value={rejectionReason}
-              onChange={(e) => setRejectionReason(e.target.value)}
-              placeholder="e.g., Duplicate report / Unrelated image / Already serviced"
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
-            />
-          </div>
-
-          <div className="flex flex-wrap gap-2.5 pt-2">
-            <button
-              type="button"
-              onClick={() => handleStatusChange('Verified')}
-              className="px-4 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              Verify Genuine (+10 Pts)
-            </button>
-            <button
-              type="button"
-              onClick={() => handleStatusChange('In Progress')}
-              className="px-4 py-2 rounded-xl text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white"
-            >
-              Mark In Progress
-            </button>
-            <button
-              type="button"
-              onClick={() => handleStatusChange('Resolved')}
-              className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white"
-            >
-              Mark Resolved (With Proof)
-            </button>
-            <button
-              type="button"
-              onClick={() => handleStatusChange('Rejected')}
-              className="px-4 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white"
-            >
-              Reject Complaint (0 Pts)
-            </button>
-          </div>
-        </div>
-
-        {/* Right: Cleaning Task Assignment & Audit Trail */}
-        <div className="lg:col-span-5 space-y-6">
+          {/* Assign Cleaning Task Form */}
           <form
             onSubmit={handleCreateTask}
             className="bg-white rounded-2xl border border-emerald-100 p-6 shadow-sm space-y-4"
@@ -921,7 +1331,9 @@ export function AuthorityComplaintDetailPage() {
               Assign Cleaning Task to Sanitation Squad
             </h3>
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Assign Worker / Sanitation Squad</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Assign Worker / Sanitation Squad
+              </label>
               <select
                 value={selectedTeam}
                 onChange={(e) => setSelectedTeam(e.target.value)}
@@ -935,7 +1347,9 @@ export function AuthorityComplaintDetailPage() {
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Task Instructions</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Task Instructions
+              </label>
               <textarea
                 rows={2}
                 value={taskDesc}
@@ -950,22 +1364,15 @@ export function AuthorityComplaintDetailPage() {
               Create &amp; Assign Cleaning Task
             </button>
           </form>
+        </div>
 
-          <div className="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm space-y-3">
-            <h3 className="text-sm font-extrabold text-slate-900">Audit Trail &amp; Review History</h3>
-            {complaint.timeline.map((st, i) => (
-              <div key={i} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 text-xs">
-                <div className="flex justify-between font-bold text-forest-900">
-                  <span>{st.status}</span>
-                  <span className="text-[10px] text-slate-400">
-                    {new Date(st.timestamp).toLocaleString()}
-                  </span>
-                </div>
-                <p className="text-slate-600 mt-0.5">{st.note}</p>
-                <p className="text-[10px] text-slate-400">Actor: {st.actor}</p>
-              </div>
-            ))}
-          </div>
+        {/* Right: Full Lifecycle Timeline + Internal Admin Notes */}
+        <div className="lg:col-span-6 bg-white rounded-2xl border border-emerald-100 p-6 shadow-sm">
+          <ComplaintProgressTimeline
+            complaint={complaint}
+            historyEntries={historyEntries}
+            viewerRole="authority"
+          />
         </div>
       </div>
     </DashboardLayout>
@@ -983,24 +1390,29 @@ export function CleaningTaskManagementPage() {
   const [remarksMap, setRemarksMap] = useState({});
   const [taskError, setTaskError] = useState('');
 
-  const handleCreate = (e) => {
+  const handleCreate = async (e) => {
     e.preventDefault();
+    setTaskError('');
     if (!description.trim()) return;
-    assignCleaningTask({
+    const res = await assignCleaningTask({
       complaintId,
       assignedTeam,
       description,
       area,
       priority,
     });
+    if (!res.success) {
+      setTaskError(res.error);
+      return;
+    }
     setDescription('');
   };
 
-  const handleStatusUpdate = (task, newStatus) => {
+  const handleStatusUpdate = async (task, newStatus) => {
     setTaskError('');
     const completionRemarks =
       remarksMap[task.id] !== undefined ? remarksMap[task.id] : task.completionRemarks;
-    const res = updateCleaningTask(task.id, {
+    const res = await updateCleaningTask(task.id, {
       status: newStatus,
       completionRemarks,
     });
@@ -1697,10 +2109,19 @@ export function ReportsAnalyticsPage() {
     count: filteredComplaints.filter((c) => c.category === cat).length,
   }));
 
-  const byStatus = ['Pending', 'Verified', 'In Progress', 'Resolved', 'Rejected'].map((st) => ({
-    name: st,
-    value: filteredComplaints.filter((c) => c.status === st).length,
-  }));
+  const byStatus = [
+    { key: 'submitted', label: 'Submitted' },
+    { key: 'under_review', label: 'Under Verification' },
+    { key: 'verified', label: 'Verified' },
+    { key: 'worker_assigned', label: 'Worker Assigned' },
+    { key: 'in_progress', label: 'Cleaning In Progress' },
+    { key: 'resolved', label: 'Resolved' },
+    { key: 'reopened', label: 'Reopened' },
+    { key: 'rejected', label: 'Not Approved' },
+  ].map((st) => ({
+    name: st.label,
+    value: filteredComplaints.filter((c) => normalizeComplaintStatus(c.status) === st.key).length,
+  })).filter((item) => item.value > 0);
 
   const monthlyTrends = [
     { month: 'Jul', reported: 4, resolved: 3, pointsEarned: 60 },
@@ -1709,7 +2130,7 @@ export function ReportsAnalyticsPage() {
     {
       month: 'Oct',
       reported: complaints.length,
-      resolved: complaints.filter((c) => c.status === 'Resolved').length,
+      resolved: complaints.filter((c) => normalizeComplaintStatus(c.status) === 'resolved').length,
       pointsEarned: 185,
     },
   ];
@@ -1731,7 +2152,7 @@ export function ReportsAnalyticsPage() {
           c.village_name || c.city_name || ''
         }","${c.locality || ''}","${c.reported_latitude ?? ''}","${c.reported_longitude ?? ''}","${
           c.location_capture_method || ''
-        }","${c.location_review_status || ''}","${c.urgency}","${c.status}","${c.submittedAt}"`
+        }","${c.location_review_status || ''}","${c.urgency}","${getStatusBadgeLabel(c.status)}","${c.submittedAt}"`
     );
     const csv = [...headers, ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -1903,60 +2324,145 @@ export function UserManagementPage() {
 
 /* 28. AUTHORITY NOTIFICATIONS PAGE */
 export function AuthorityNotificationsPage() {
-  const { notifications, markNotificationRead, markAllNotificationsRead } = useApp();
+  const {
+    myNotifications,
+    unreadNotificationCount,
+    markNotificationRead,
+    markAllNotificationsRead,
+    clearReadNotifications,
+  } = useApp();
+  const [filterMode, setFilterMode] = useState('all');
 
-  const authNotifs = notifications.filter((n) => n.targetRole === 'authority');
+  const visibleNotifs = myNotifications.filter((n) => {
+    const cat = n.type || n.category;
+    if (filterMode === 'unread') return !n.is_read && !n.read;
+    if (filterMode === 'new_complaint') return cat === 'admin_new_complaint' || cat === 'new_complaint';
+    return true;
+  });
 
   return (
     <DashboardLayout
       role="authority"
-      title="Authority Alerts & SLA Notifications"
-      subtitle="High-priority complaint alerts, overdue notifications, and reward redemption requests."
+      title="Administrator Notifications & Incoming Alerts"
+      subtitle="Real-time alerts for new citizen complaints, reopened issues, and reward redemptions."
       actions={
-        <button
-          type="button"
-          onClick={markAllNotificationsRead}
-          className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-100 text-forest-900"
-        >
-          Mark All Read
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-xl border border-slate-200 bg-white p-0.5 text-xs">
+            {[
+              { id: 'all', label: `All (${myNotifications.length})` },
+              { id: 'unread', label: `Unread (${unreadNotificationCount})` },
+              { id: 'new_complaint', label: 'New Complaints' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setFilterMode(tab.id)}
+                className={`px-2.5 py-1 rounded-lg font-bold transition ${
+                  filterMode === tab.id ? 'bg-forest-800 text-white' : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          {unreadNotificationCount > 0 && (
+            <button
+              type="button"
+              onClick={markAllNotificationsRead}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-100 text-forest-900 hover:bg-emerald-200"
+            >
+              Mark All as Read
+            </button>
+          )}
+          {myNotifications.some((n) => n.is_read || n.read) && (
+            <button
+              type="button"
+              onClick={clearReadNotifications}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-100 text-slate-700 hover:bg-slate-200"
+            >
+              Archive Read
+            </button>
+          )}
+        </div>
       }
     >
-      <div className="space-y-3">
-        {authNotifs.map((n) => (
-          <div
-            key={n.id}
-            className={`p-4 rounded-2xl border flex items-start justify-between gap-4 ${
-              n.read ? 'bg-white border-slate-200' : 'bg-amber-50/70 border-amber-300 shadow-sm'
-            }`}
-          >
-            <div className="space-y-1">
-              <h3 className="text-sm font-bold text-slate-900">{n.title}</h3>
-              <p className="text-xs text-slate-600">{n.message}</p>
-              <p className="text-[11px] text-slate-400">{new Date(n.createdAt).toLocaleString()}</p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {n.link && (
-                <Link
-                  to={n.link}
-                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-forest-800 text-white"
-                >
-                  Open
-                </Link>
-              )}
-              {!n.read && (
-                <button
-                  type="button"
-                  onClick={() => markNotificationRead(n.id)}
-                  className="text-xs font-bold text-slate-600 hover:underline"
-                >
-                  Dismiss
-                </button>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
+      {visibleNotifs.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-emerald-100 p-10 text-center space-y-2 shadow-sm">
+          <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto" />
+          <p className="text-sm font-extrabold text-slate-900">
+            You&apos;re all caught up! New updates will appear here.
+          </p>
+          <p className="text-xs text-slate-500">
+            Whenever a citizen submits a new sanitation complaint, an alert will appear here immediately.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {visibleNotifs.map((n) => {
+            const isRead = Boolean(n.is_read ?? n.read);
+            const cat = n.type || n.category;
+            const compId = n.related_complaint_id || n.complaint_id || n.metadata?.complaint_id;
+            const targetPath =
+              n.action_url || n.link || (compId ? `/authority/complaints/${compId}` : '/authority/complaints');
+
+            return (
+              <div
+                key={n.id}
+                className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition ${
+                  isRead ? 'bg-white border-slate-200' : 'bg-amber-50/70 border-amber-300 shadow-sm'
+                }`}
+              >
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900">
+                      {cat === 'admin_new_complaint' || cat === 'new_complaint'
+                        ? 'Incoming Complaint'
+                        : cat || 'Admin Alert'}
+                    </span>
+                    {compId && (
+                      <span className="font-mono text-[11px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
+                        ID: {compId}
+                      </span>
+                    )}
+                    <span
+                      className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full ${
+                        isRead ? 'bg-slate-100 text-slate-500' : 'bg-emerald-600 text-white'
+                      }`}
+                    >
+                      {isRead ? 'Read' : 'Unread'}
+                    </span>
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-900">{n.title}</h3>
+                  <p className="text-xs text-slate-600 leading-relaxed">{n.message}</p>
+                  <p className="text-[11px] text-slate-400">
+                    {new Date(n.created_at || n.createdAt).toLocaleString()}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Link
+                    to={targetPath}
+                    onClick={() => {
+                      if (!isRead) markNotificationRead(n.id);
+                    }}
+                    className="px-3.5 py-2 rounded-xl text-xs font-bold bg-forest-800 hover:bg-forest-900 text-white"
+                  >
+                    {compId ? 'Open Complaint' : 'View'}
+                  </Link>
+                  {!isRead && (
+                    <button
+                      type="button"
+                      onClick={() => markNotificationRead(n.id)}
+                      className="px-3 py-2 rounded-xl text-xs font-bold bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
+                    >
+                      Mark Read
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </DashboardLayout>
   );
 }
